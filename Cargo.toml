@@ -1,0 +1,49 @@
+[workspace]
+members = ["gui"]
+
+[package]
+name = "famulus-core"
+version = "0.1.0"
+edition = "2021"
+description = "Famulus: persönlicher KI-Agent mit vollem Rechnerzugriff, austauschbarem LLM-Backend und harten Sicherheitsgrenzen."
+
+[lib]
+name = "famulus_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "famulus"
+path = "src/main.rs"
+
+[dependencies]
+# Nur die Bausteine, die Famulus wirklich braucht - "full" zieht Netzwerk-
+# Sockets, Signal-Handling und Zeitgeber mit, die hier nie angefasst werden.
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",  # der Thread-Pool, auf dem die Schleife laeuft
+    "macros",           # #[tokio::main]
+    "fs",               # Dateien lesen/schreiben
+    "process",          # run_shell
+    "io-util",          # begrenztes Lesen grosser Dateien
+] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dotenvy = "0.15"
+toml = "0.8"
+dirs = "5"
+colored = "2"
+async-trait = "0.1"
+# Gedaechtnis: SQLite als einzelne Datei, kein Server. "bundled" heisst, die
+# Datenbank wird mitkompiliert statt vom System geholt - dann haengt Famulus
+# nicht an der SQLite-Version der jeweiligen Fedora-Installation.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Ohne diesen Block baut Cargo Release-Binaries mit Debug-Symbolen und ohne
+# Optimierung ueber Crate-Grenzen hinweg. Kostet laengere Release-Builds,
+# spart dafuer gut die Haelfte der Dateigroesse.
+[profile.release]
+lto = "fat"          # Optimierung ueber Crate-Grenzen hinweg
+codegen-units = 1    # langsamer uebersetzen, besser optimieren
+strip = "symbols"    # Debug-Namen aus dem Binary werfen

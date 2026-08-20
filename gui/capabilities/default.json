@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Rechte des Famulus-Fensters. Tauri 2 erlaubt dem Frontend standardmaessig nichts - ohne diese Datei kann die Seite nicht einmal auf Ereignisse des Kerns lauschen, und der Verlauf im Fenster bleibt leer.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

@@ -1,0 +1,49 @@
+# Kopiere diese Datei nach ~/.famulus/famulus.toml und pass sie an.
+
+# "anthropic", "hyper", "grok", "openrouter" oder "openai"
+provider = "hyper"
+
+# Optional: Modell überschreiben. Leer lassen für den Standard des jeweiligen
+# Anbieters (hyper: deepseek-v4-flash, anthropic: claude-opus-5, grok: grok-4).
+# model = "deepseek-v4-pro"
+
+# Optional: abweichende API-Adresse. Für kompatible Dienste, die dasselbe
+# Protokoll sprechen - etwa ein lokaler Server unter http://localhost:11434.
+# base_url = "https://hyper.charm.land"
+
+# Optional: aus welcher Umgebungsvariable der API-Key kommt.
+# api_key_env = "HYPER_API_KEY"
+
+# Sicherheitsnetz gegen Endlosschleifen - Famulus bricht spätestens hier ab.
+max_turns = 20
+
+# Wie lang eine einzelne Modellantwort höchstens werden darf. Zu klein heißt:
+# lange Antworten brechen mittendrin ab, ohne dass es auffällt.
+max_antwort_tokens = 16000
+
+# Geduld mit dem Anbieter, in Sekunden.
+timeout_sekunden = 300
+
+# Verzeichnisse, die Famulus nicht anfassen darf - weder lesen noch schreiben.
+#
+# ACHTUNG: Diese Liste ist der EINZIGE Pfad-Schutz. Es gibt keine zusätzlich
+# im Code verankerte Sperre mehr. Eine leere Liste heißt: Famulus darf überall
+# lesen und schreiben.
+#
+# Und selbst mit Einträgen gilt: run_shell läuft ungefiltert. Wer einen Ordner
+# wirklich dichtmachen will, kommt an der Shell nicht vorbei - dafür bräuchte
+# es Dateisystem-Rechte, keine Liste in einer TOML-Datei.
+deny_paths = []
+
+# ---- Gedächtnis ----
+
+# Obsidian-Vault als Langzeitgedächtnis. Leer lassen = Vault-Werkzeuge werden
+# gar nicht erst angeboten.
+# vault = "~/Documents/Hermes-Vault"
+
+# Wie viele gemerkte Sätze höchstens in den Prompt gelegt werden.
+max_erinnerungen = 12
+
+# Nach jedem erfolgreichen Auftrag zurückblicken und Erkenntnisse merken.
+# Kostet einen zusätzlichen Modellaufruf pro Auftrag.
+reflexion = true

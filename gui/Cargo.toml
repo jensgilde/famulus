@@ -1,0 +1,20 @@
+[package]
+name = "famulus-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Famulus: grafische Oberflaeche (Tauri 2) auf demselben Kern wie das CLI."
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Derselbe Kern wie das CLI - keine zweite Kopie der Sicherheitslogik.
+famulus-core = { path = ".." }
+
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+reqwest = { version = "0.12", features = ["json"] }
+toml = "0.8"
+dirs = "5"
