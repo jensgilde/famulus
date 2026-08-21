@@ -111,6 +111,19 @@
   .presets-area .model-select-dropdown {
     left: 0; right: auto; min-width: 100%;
   }
+  .sidebar-search {
+    padding: 8px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .sidebar-search input {
+    width: 100%; box-sizing: border-box;
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text-primary); font-family: inherit;
+    font-size: 11px; padding: 6px 8px;
+    transition: border-color .2s;
+  }
+  .sidebar-search input:focus {
+    outline: none; border-color: var(--accent);
+  }
   .preset-textarea {
     width: 100%; min-height: 120px; max-height: 200px;
     background: var(--bg-input); border: 1px solid var(--border);
@@ -350,6 +363,7 @@
   <div class="main-content">
     <div class="sidebar left-sidebar collapsed" id="leftSidebar">
       <div class="sidebar-header">Chats <button class="new-chat-btn" id="neuerChatBtn" title="Neuer Chat">+</button></div>
+      <div class="sidebar-search"><input type="text" id="suchEingabe" placeholder="Chats durchsuchen…"></div>
       <div class="conversation-list" id="conversationList"></div>
     </div>
     <div class="chat-area">
@@ -392,6 +406,17 @@
 <script>
 const { invoke } = window.__TAURI__?.core ?? {};
 const { listen } = window.__TAURI__?.event ?? {};
+
+// Ein einzelner Tippfehler (fehlendes DOM-Element, kaputter Selector) in
+// irgendeinem Top-Level-Codepfad hat frueher das gesamte Skript stillschweigend
+// angehalten - keine Version, keine Presets, nichts, ohne jeden Hinweis warum.
+// Diese beiden Handler sorgen dafuer, dass sowas wenigstens sichtbar wird.
+window.addEventListener('error', e => {
+  zeigeFehlerBanner('Fehler im Fenster: ' + e.message);
+});
+window.addEventListener('unhandledrejection', e => {
+  zeigeFehlerBanner('Unbehandelter Fehler: ' + (e.reason?.message || e.reason));
+});
 
 // ── Zustand ──────────────────────────────────────────────────────────────
 let chats = [];
@@ -1268,15 +1293,19 @@ listen('famulus-ereignis', e => {
 // ── Start ────────────────────────────────────────────────────────────────
 
 (async () => {
-  istIOS = await invoke('ist_ios').catch(() => false);
-  await ladeChats();
-  initSidebars();
-  await ladeVersion();
-  await ladeZustand();
-  await ladeModelle();
-  await ladePresets();
-  await ladeCredits();
-  renderAlles();
+  try {
+    istIOS = await invoke('ist_ios').catch(() => false);
+    await ladeChats();
+    initSidebars();
+    await ladeVersion();
+    await ladeZustand();
+    await ladeModelle();
+    await ladePresets();
+    await ladeCredits();
+    renderAlles();
+  } catch (e) {
+    zeigeFehlerBanner('Start fehlgeschlagen: ' + (e?.message || e));
+  }
   // Credits laufen auch außerhalb dieses Fensters weg (CLI, anderes Gerät) -
   // regelmäßig neu abfragen statt nur bei eigenen Aktionen.
   setInterval(ladeCredits, 30000);
