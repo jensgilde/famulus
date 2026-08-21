@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     let provider = llm::build_provider(&config)?;
     let agent = Agent::new(config, provider, Arc::clone(&ui));
 
-    match agent.run_task(&cli.task).await {
+    match agent.run_task(&[], &cli.task).await {
         Ok(result) => {
             println!("\n{}\n{result}", "── Ergebnis ──".bold());
         }

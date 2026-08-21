@@ -1,10 +1,10 @@
 # Kopiere diese Datei nach ~/.famulus/famulus.toml und pass sie an.
 
-# "anthropic", "hyper", "grok", "openrouter" oder "openai"
+# "hyper" oder "openrouter"
 provider = "hyper"
 
 # Optional: Modell überschreiben. Leer lassen für den Standard des jeweiligen
-# Anbieters (hyper: deepseek-v4-flash, anthropic: claude-opus-5, grok: grok-4).
+# Anbieters (hyper: deepseek-v4-flash, openrouter: openai/gpt-4o).
 # model = "deepseek-v4-pro"
 
 # Optional: abweichende API-Adresse. Für kompatible Dienste, die dasselbe
@@ -15,7 +15,7 @@ provider = "hyper"
 # api_key_env = "HYPER_API_KEY"
 
 # Sicherheitsnetz gegen Endlosschleifen - Famulus bricht spätestens hier ab.
-max_turns = 20
+max_turns = 101
 
 # Wie lang eine einzelne Modellantwort höchstens werden darf. Zu klein heißt:
 # lange Antworten brechen mittendrin ab, ohne dass es auffällt.
@@ -39,7 +39,7 @@ deny_paths = []
 
 # Obsidian-Vault als Langzeitgedächtnis. Leer lassen = Vault-Werkzeuge werden
 # gar nicht erst angeboten.
-# vault = "~/Documents/Hermes-Vault"
+vault = "~/KI Agenten/famulus/vault"
 
 # Wie viele gemerkte Sätze höchstens in den Prompt gelegt werden.
 max_erinnerungen = 12

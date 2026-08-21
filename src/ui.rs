@@ -1,11 +1,11 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Alles, was der Agent während eines Auftrags zu berichten hat. Statt direkt
 /// zu drucken schickt er diese Ereignisse an die Oberfläche - im Terminal
 /// werden daraus Textzeilen, in der GUI Einträge im Fenster.
 ///
 /// `Serialize`, damit die GUI sie unverändert ans Frontend durchreichen kann.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "art", rename_all = "snake_case")]
 pub enum AgentEvent {
     /// Auftrag angenommen, Schleife startet.

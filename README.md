@@ -10,15 +10,12 @@ was du in der Config einträgst oder vergisst.
 | `provider` | Endpunkt | Key aus | Protokoll |
 |---|---|---|---|
 | `hyper` | `https://hyper.charm.land` | `HYPER_API_KEY` | Anthropic Messages |
-| `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | Anthropic Messages |
-| `grok` | `https://api.x.ai` | `XAI_API_KEY` | OpenAI Chat Completions |
+| `openrouter` | `https://openrouter.ai/api` | `OPENROUTER_API_KEY` | OpenAI Chat Completions |
 
-Charm Hyper spricht das Anthropic-Protokoll, deshalb teilt sich `hyper` die
-Implementierung mit `anthropic` und setzt nur andere Vorgaben. Mit `base_url`
-und `api_key_env` in der `famulus.toml` lässt sich jeder kompatible Dienst
-einhängen, ohne Code anzufassen - Hyper spricht daneben auch die
-OpenAI-Variante, ist also alternativ über `provider = "grok"` plus
-`base_url = "https://hyper.charm.land"` erreichbar.
+Charm Hyper spricht das Anthropic-Protokoll, `openrouter` das OpenAI-Protokoll
+- deshalb reichen zwei Implementierungen (`llm/anthropic.rs`, `llm/openai.rs`).
+Mit `base_url` und `api_key_env` in der `famulus.toml` lässt sich bei Bedarf
+ein anderer kompatibler Dienst einhängen, ohne Code anzufassen.
 
 Modellliste: `curl -s https://hyper.charm.land/v1/models`
 
@@ -31,12 +28,12 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # Config anlegen
 mkdir -p ~/.famulus
 cp famulus.toml.example ~/.famulus/famulus.toml
-# ~/.famulus/famulus.toml öffnen, provider wählen (anthropic/grok),
+# ~/.famulus/famulus.toml öffnen, provider wählen (hyper/openrouter),
 # ggf. eigene deny_paths ergänzen
 
 # API-Key hinterlegen
 cp .env.example .env
-# .env öffnen, XAI_API_KEY oder ANTHROPIC_API_KEY eintragen
+# .env öffnen, HYPER_API_KEY oder OPENROUTER_API_KEY eintragen
 ```
 
 ## Bauen und starten
@@ -145,8 +142,7 @@ gestartetes Fenster kein sinnvolles Arbeitsverzeichnis hat.
 - `src/config.rs` – lädt `famulus.toml` und `.env`, Pfad-Auflösung
 - `src/permissions.rs` – Allow/Deny-Logik gegen `deny_paths`
 - `src/llm/` – `LlmProvider`-Trait, dazu zwei Protokolle: `anthropic.rs`
-  (Anthropic, Charm Hyper) und `openai.rs` (Grok, OpenRouter, OpenAI, lokale
-  Server)
+  (Charm Hyper) und `openai.rs` (OpenRouter)
 - `src/tools/` – `Tool`-Trait + Datei-Lesen/Schreiben, Shell-Ausführung
 - `src/agent.rs` – die Beobachten-Denken-Handeln-Schleife
 - `src/ui.rs` – `Ui`-Trait (Ereignisse) und die Terminal-Variante

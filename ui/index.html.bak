@@ -202,7 +202,7 @@
   <div class="toolbar">
     <div class="toolbar-left">
       <button class="icon-btn" id="toggleLinks" title="Chats ein-/ausblenden">▶</button>
-      <span class="toolbar-title" id="toolbar-version">FAMULUS</span>
+      <span class="toolbar-title">FAMULUS</span>
     </div>
     <div class="toolbar-right">
       <button class="icon-btn" id="toggleRechts" title="Archiv ein-/ausblenden">◀</button>
@@ -284,7 +284,6 @@ const konfigDot = document.getElementById('konfigDot');
 const fehlerBanner = document.getElementById('fehlerBanner');
 
 let laeuft = false;
-let istIOS = false;       // Auf dem iPad: Auftraege gehen ueber Tailscale zum Mac
 let aktuelleProvider = 'hyper';
 let aktuellesModell = '';
 let alleModelle = [];
@@ -400,7 +399,7 @@ function modellName(m) {
 
 async function ladeModelleFuerProvider(provider) {
   try {
-    alleModelle = await invoke(istIOS ? 'remote_modelle_liste' : 'modelle_liste', { provider });
+    alleModelle = await invoke('modelle_liste', { provider });
     const opts = alleModelle.map(m => {
       const preis = preisProMillion(m);
       return {
@@ -423,7 +422,7 @@ async function ladeModelleFuerProvider(provider) {
 async function setzeModell(provider, model) {
   if (!model) return;
   try {
-    const neu = await invoke(istIOS ? 'remote_setze_modell' : 'setze_modell', { provider, model });
+    const neu = await invoke('setze_modell', { provider, model });
     zustandEl.textContent = neu;
     konfigDot.classList.remove('offline');
     ladeCredits();
@@ -439,7 +438,7 @@ function zeigeFehlerBanner(text) {
 
 async function ladeCredits() {
   try {
-    const c = await invoke(istIOS ? 'remote_credits' : 'credits');
+    const c = await invoke('credits');
     creditsEl.textContent = c === 'n/a' ? '—' : c;
   } catch (e) {
     creditsEl.textContent = '—';
@@ -451,13 +450,9 @@ function starteCreditsTimer() {
 }
 
 // ---- Init ----
-invoke('ist_ios').then(ios => { istIOS = ios; return invoke(istIOS ? 'remote_zustand' : 'zustand'); })
+invoke('zustand')
   .then(t => {
     zustandEl.textContent = t;
-    // Version abrufen
-    invoke(istIOS ? 'remote_version' : 'version').then(v => {
-      document.getElementById('toolbar-version').textContent = 'FAMULUS v' + v;
-    }).catch(() => {});
     const parts = t.split(' · ');
     if (parts.length >= 2) { aktuelleProvider = parts[0].trim(); aktuellesModell = parts[1].trim(); }
     const pl = providerOptions.find(p => p.value === aktuelleProvider);
@@ -737,7 +732,7 @@ async function los() {
   renderAlles();
 
   try {
-    await invoke(istIOS ? 'remote_auftrag' : 'starte_auftrag', { auftrag, verlauf });
+    await invoke('starte_auftrag', { auftrag, verlauf });
   } catch (e) {
     chat.nachrichten.push({ rolle: 'fehler', inhalt: 'Start fehlgeschlagen: ' + e });
     speichereChats();

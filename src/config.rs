@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    pub provider: String, // "anthropic", "hyper", "grok", "openrouter", "openai"
+    pub provider: String, // "hyper" oder "openrouter"
     #[serde(default)]
     pub model: Option<String>,
     /// Abweichende API-Adresse. Leer lassen für den echten Anbieter; gesetzt
@@ -76,7 +76,7 @@ impl Config {
 }
 
 fn default_max_turns() -> u32 {
-    20
+    101
 }
 
 impl Config {

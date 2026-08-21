@@ -1,2 +1,9 @@
 /target
 .env
+gui/gen
+
+# Laufzeit-Daten, kein Quellcode: das Gedächtnis (SQLite) und der
+# Obsidian-Vault liegen jetzt im Projektordner statt unter ~/.famulus,
+# gehören aber nicht ins Repo - das ist Jens' persönliches Wissen.
+/gedaechtnis.db
+/vault/

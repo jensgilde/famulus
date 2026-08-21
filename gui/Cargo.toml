@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Famulus: grafische Oberflaeche (Tauri 2) auf demselben Kern wie das CLI."
 
+[lib]
+name = "famulus_gui"
+path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib", "lib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -18,3 +23,10 @@ anyhow = "1"
 reqwest = { version = "0.12", features = ["json"] }
 toml = "0.8"
 dirs = "5"
+
+# Tokio (auch fuer Remote-Server)
+tokio = { version = "1", features = ["net", "sync", "time"] }
+
+# Remote-Fernbedienung: iPad steuert den Mac ueber Tailscale
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

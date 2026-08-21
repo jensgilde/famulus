@@ -39,13 +39,14 @@ pub struct Gedaechtnis {
 }
 
 impl Gedaechtnis {
-    /// Der Standardort: `~/.famulus/gedaechtnis.db`. Liegt bewusst neben der
-    /// Konfiguration und nicht im Projektordner - das Gedächtnis gehört zu
-    /// Jens, nicht zu einer Kopie des Quellcodes.
+    /// Der Standardort: `~/KI Agenten/famulus/gedaechtnis.db`, direkt im
+    /// Projektordner statt versteckt unter `~/.famulus` - auf Jens' Wunsch
+    /// liegt das Gedächtnis (wie der Vault) sichtbar bei Famulus selbst.
     pub fn standard() -> Result<Self> {
         let ordner = dirs::home_dir()
             .context("Kein Home-Verzeichnis gefunden")?
-            .join(".famulus");
+            .join("KI Agenten")
+            .join("famulus");
         Self::oeffnen(&ordner.join("gedaechtnis.db"))
     }
 

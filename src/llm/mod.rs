@@ -141,35 +141,16 @@ pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn 
     let key_var = config.api_key_env.clone();
 
     match config.provider.as_str() {
-        "anthropic" => Ok(Box::new(anthropic::AnthropicProvider::neu(
-            "anthropic",
-            modell.unwrap_or_else(|| "claude-opus-5".to_string()),
-            basis(basis_url, "https://api.anthropic.com"),
-            &key_var.unwrap_or_else(|| "ANTHROPIC_API_KEY".to_string()),
-            max_tokens,
-            timeout,
-        )?)),
-
-        // Charm Hyper serviert unter /v1/messages dasselbe Protokoll wie
-        // Anthropic - deshalb dieselbe Implementierung, nur mit anderer
-        // Adresse, anderem Key und anderem Standardmodell. Genau dafür ist
-        // das LlmProvider-Trait da: ein neuer Anbieter kostet hier sechs
-        // Zeilen statt einer eigenen Datei.
+        // Charm Hyper spricht das Anthropic-Messages-Protokoll - deshalb
+        // dieselbe Implementierung wie ein echter Anthropic-Zugang, nur mit
+        // anderer Adresse, anderem Key und anderem Standardmodell. Genau
+        // dafür ist das LlmProvider-Trait da: ein neuer Anbieter kostet hier
+        // sechs Zeilen statt einer eigenen Datei.
         "hyper" => Ok(Box::new(anthropic::AnthropicProvider::neu(
             "hyper",
             modell.unwrap_or_else(|| "deepseek-v4-flash".to_string()),
             basis(basis_url, "https://hyper.charm.land"),
             &key_var.unwrap_or_else(|| "HYPER_API_KEY".to_string()),
-            max_tokens,
-            timeout,
-        )?)),
-
-        "grok" => Ok(Box::new(openai::OpenAiProvider::neu(
-            "grok",
-            modell.unwrap_or_else(|| "grok-4".to_string()),
-            basis(basis_url, "https://api.x.ai"),
-            &key_var.unwrap_or_else(|| "XAI_API_KEY".to_string()),
-            Vec::new(),
             max_tokens,
             timeout,
         )?)),
@@ -188,21 +169,8 @@ pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn 
             timeout,
         )?)),
 
-        // Sammelzweig für alles andere, was OpenAI-kompatibel spricht -
-        // lokale Server (Ollama, llama.cpp, vLLM) genauso wie fremde
-        // Dienste. Braucht nur base_url und api_key_env in der Config.
-        "openai" => Ok(Box::new(openai::OpenAiProvider::neu(
-            "openai",
-            modell.unwrap_or_else(|| "gpt-4o".to_string()),
-            basis(basis_url, "https://api.openai.com"),
-            &key_var.unwrap_or_else(|| "OPENAI_API_KEY".to_string()),
-            Vec::new(),
-            max_tokens,
-            timeout,
-        )?)),
-
         other => anyhow::bail!(
-            "Unbekannter Provider '{other}' in famulus.toml. Erlaubt: 'anthropic', 'hyper', 'grok', 'openrouter', 'openai'."
+            "Unbekannter Provider '{other}' in famulus.toml. Erlaubt: 'hyper', 'openrouter'."
         ),
     }
 }

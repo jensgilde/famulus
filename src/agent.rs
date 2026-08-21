@@ -110,13 +110,24 @@ impl Agent {
     /// Führt einen Auftrag vollständig aus - läuft die Beobachten-Denken-
     /// Handeln-Schleife, bis das Modell eine finale Text-Antwort gibt oder
     /// max_turns erreicht ist (Sicherheitsnetz gegen Endlosschleifen).
-    pub async fn run_task(&self, task: &str) -> anyhow::Result<String> {
+    ///
+    /// `vorherige_nachrichten` ist der bisherige Gesprächsverlauf des Chats,
+    /// in dem dieser Auftrag steht - leer für einen neuen Chat oder das CLI
+    /// (das kein Chat-Konzept kennt). Famulus selbst hält keinen Verlauf
+    /// zwischen Aufrufen fest, das übernimmt die Oberfläche (siehe
+    /// `ui/index.html`, `localStorage`) - der Agent bekommt ihn bei jedem
+    /// Auftrag frisch mitgegeben.
+    pub async fn run_task(
+        &self,
+        vorherige_nachrichten: &[Message],
+        task: &str,
+    ) -> anyhow::Result<String> {
         self.ui.ereignis(AgentEvent::Gestartet {
             provider: self.provider.name().to_string(),
             auftrag: task.to_string(),
         });
 
-        let ergebnis = self.auftrag_ausfuehren(task).await;
+        let ergebnis = self.auftrag_ausfuehren(vorherige_nachrichten, task).await;
 
         // Protokoll und Rückblick laufen NACH dem Auftrag und dürfen sein
         // Ergebnis nicht mehr verändern - auch nicht, wenn sie selbst
@@ -139,10 +150,15 @@ impl Agent {
     }
 
     /// Die eigentliche Beobachten-Denken-Handeln-Schleife.
-    async fn auftrag_ausfuehren(&self, task: &str) -> anyhow::Result<String> {
+    async fn auftrag_ausfuehren(
+        &self,
+        vorherige_nachrichten: &[Message],
+        task: &str,
+    ) -> anyhow::Result<String> {
         let system = self.systemvorspann(task);
         let tool_defs: Vec<_> = self.tools.values().map(|t| t.definition()).collect();
-        let mut messages = vec![Message::User(task.to_string())];
+        let mut messages = vorherige_nachrichten.to_vec();
+        messages.push(Message::User(task.to_string()));
 
         for turn in 0..self.max_turns {
             let antwort = self
