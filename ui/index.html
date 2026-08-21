@@ -500,30 +500,84 @@ document.addEventListener("click", e => {
 });
 
 
-// ── Persistenz ───────────────────────────────────────────────────────────
-const LS_KEY = 'famulus-chats';
-const LS_ARCHIV = 'famulus-archiv';
-const LS_AKTIV = 'famulus-aktiv';
+// ── Persistenz (SQLite) ─────────────────────────────────────────────────
 const LS_SIDEBAR = 'famulus-sidebars';
+const LS_MIGRATED = 'famulus-sqlite-migrated';
 
-function ladeChats() {
-  try {
-    chats = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
-  } catch { chats = []; }
-  if (chats.length === 0) {
-    chats.push({ id: 'c1', titel: 'Neuer Chat', nachrichten: [], createdAt: Date.now() });
+async function ladeChats() {
+  // Migration von localStorage → SQLite beim ersten Start
+  const migrated = localStorage.getItem(LS_MIGRATED);
+  if (!migrated) {
+    try {
+      const old = JSON.parse(localStorage.getItem('famulus-chats') || '[]');
+      const oldArchiv = JSON.parse(localStorage.getItem('famulus-archiv') || '[]');
+      const oldAktiv = localStorage.getItem('famulus-aktiv');
+      for (const c of [...old, ...oldArchiv]) {
+        const archiviert = oldArchiv.some(a => a.id === c.id);
+        await invoke('history_speichern', {
+          id: null,
+          titel: c.titel || 'Neuer Chat',
+          nachrichten: JSON.stringify(c.nachrichten || [])
+        });
+        // Note: Archiv-Status wird nach dem Speichern gesetzt
+      }
+      if (old.length > 0 || oldArchiv.length > 0) {
+        // Alte localStorage-Daten löschen
+        localStorage.removeItem('famulus-chats');
+        localStorage.removeItem('famulus-archiv');
+        localStorage.removeItem('famulus-aktiv');
+      }
+      localStorage.setItem(LS_MIGRATED, '1');
+    } catch(e) { console.error('Migration fehlgeschlagen:', e); }
   }
+
+  // Aus SQLite laden
   try {
-    archivedChats = JSON.parse(localStorage.getItem(LS_ARCHIV) || '[]');
-  } catch { archivedChats = []; }
-  const aid = localStorage.getItem(LS_AKTIV);
+    const raw = await invoke('history_liste');
+    chats = raw.map(e => ({
+      id: String(e.id),
+      titel: e.titel,
+      nachrichten: JSON.parse(e.nachrichten || '[]'),
+      createdAt: new Date(e.erstellt).getTime(),
+      sqliteId: e.id
+    }));
+    const rawArchiv = await invoke('history_archiv_liste');
+    archivedChats = rawArchiv.map(e => ({
+      id: String(e.id),
+      titel: e.titel,
+      nachrichten: JSON.parse(e.nachrichten || '[]'),
+      createdAt: new Date(e.erstellt).getTime(),
+      sqliteId: e.id
+    }));
+  } catch(e) { console.error('Chats laden:', e); chats = []; archivedChats = []; }
+
+  if (chats.length === 0) {
+    const id = 'c' + Date.now();
+    chats.push({ id, titel: 'Neuer Chat', nachrichten: [], createdAt: Date.now() });
+    await speichereChats();
+  }
+  const aid = localStorage.getItem('famulus-aktiv');
   aktiverChatId = (aid && chats.find(c => c.id === aid)) ? aid : chats[0].id;
 }
 
-function speichereChats() {
-  localStorage.setItem(LS_KEY, JSON.stringify(chats));
-  localStorage.setItem(LS_ARCHIV, JSON.stringify(archivedChats));
-  localStorage.setItem(LS_AKTIV, aktiverChatId);
+async function speichereChats() {
+  localStorage.setItem('famulus-aktiv', aktiverChatId);
+  for (const c of chats) {
+    if (c.sqliteId) {
+      await invoke('history_speichern', {
+        id: c.sqliteId,
+        titel: c.titel,
+        nachrichten: JSON.stringify(c.nachrichten)
+      }).catch(e => console.error('Chat speichern:', e));
+    } else {
+      const newId = await invoke('history_speichern', {
+        id: null,
+        titel: c.titel,
+        nachrichten: JSON.stringify(c.nachrichten)
+      }).catch(e => { console.error('Chat speichern:', e); return null; });
+      if (newId) c.sqliteId = newId;
+    }
+  }
 }
 
 function aktiverChat() {
@@ -871,7 +925,7 @@ function zeigeFehlerBanner(msg) {
   setTimeout(() => el.remove(), 4000);
 }
 
-// ── Chat-Verwaltung ──────────────────────────────────────────────────────
+// ── Chat-Verwaltung (SQLite) ──────────────────────────────────────────────
 
 function chatWechseln(id) {
   aktiverChatId = id;
@@ -879,32 +933,80 @@ function chatWechseln(id) {
   renderAlles();
 }
 
-function chatArchivieren(id) {
+async function chatArchivieren(id) {
   if (chats.length <= 1) return;
   const idx = chats.findIndex(c => c.id === id);
   if (idx === -1) return;
   const [chat] = chats.splice(idx, 1);
   archivedChats.push(chat);
   if (aktiverChatId === id) aktiverChatId = chats[0].id;
-  speichereChats();
+  if (chat.sqliteId) {
+    await invoke('history_archivieren', { id: chat.sqliteId, archiviert: true }).catch(e => console.error('Archivieren:', e));
+  }
+  await speichereChats();
   renderAlles();
 }
 
-function chatWiederherstellen(id) {
+async function chatWiederherstellen(id) {
   const idx = archivedChats.findIndex(c => c.id === id);
   if (idx === -1) return;
   const [chat] = archivedChats.splice(idx, 1);
   chats.push(chat);
-  speichereChats();
+  if (chat.sqliteId) {
+    await invoke('history_archivieren', { id: chat.sqliteId, archiviert: false }).catch(e => console.error('Wiederherstellen:', e));
+  }
+  await speichereChats();
   renderAlles();
 }
 
-document.getElementById('neuerChatBtn').addEventListener('click', () => {
+async function chatLoeschen(id) {
+  const chat = chats.find(c => c.id === id) || archivedChats.find(c => c.id === id);
+  if (!chat) return;
+  if (chat.sqliteId) {
+    await invoke('history_loeschen', { id: chat.sqliteId }).catch(e => console.error('Löschen:', e));
+  }
+  chats = chats.filter(c => c.id !== id);
+  archivedChats = archivedChats.filter(c => c.id !== id);
+  if (aktiverChatId === id && chats.length > 0) aktiverChatId = chats[0].id;
+  await speichereChats();
+  renderAlles();
+}
+
+document.getElementById('neuerChatBtn').addEventListener('click', async () => {
   const id = 'c' + Date.now();
   chats.push({ id, titel: 'Neuer Chat', nachrichten: [], createdAt: Date.now() });
   aktiverChatId = id;
-  speichereChats();
+  await speichereChats();
   renderAlles();
+});
+
+// ── Suchleiste ───────────────────────────────────────────────────────────
+let suchTimer = null;
+document.getElementById('suchEingabe').addEventListener('input', async function() {
+  const begriff = this.value.trim();
+  clearTimeout(suchTimer);
+  suchTimer = setTimeout(async () => {
+    if (!begriff) {
+      await ladeChats();
+      renderConversationList();
+      return;
+    }
+    try {
+      const raw = await invoke('history_suche', { begriff });
+      chats = raw.map(e => ({
+        id: String(e.id),
+        titel: e.titel,
+        nachrichten: JSON.parse(e.nachrichten || '[]'),
+        createdAt: new Date(e.erstellt).getTime(),
+        sqliteId: e.id
+      }));
+      if (chats.length === 0) {
+        conversationList.innerHTML = '<div style="padding:12px;font-size:11px;color:var(--text-faint);text-align:center;">Keine Treffer</div>';
+      } else {
+        renderConversationList();
+      }
+    } catch(e) { console.error('Suche:', e); }
+  }, 300);
 });
 
 // ── Provider/Modell-Auswahl ──────────────────────────────────────────────
@@ -1167,7 +1269,7 @@ listen('famulus-ereignis', e => {
 
 (async () => {
   istIOS = await invoke('ist_ios').catch(() => false);
-  ladeChats();
+  await ladeChats();
   initSidebars();
   await ladeVersion();
   await ladeZustand();

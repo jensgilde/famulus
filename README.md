@@ -11,6 +11,7 @@ was du in der Config einträgst oder vergisst.
 |---|---|---|---|
 | `hyper` | `https://hyper.charm.land` | `HYPER_API_KEY` | Anthropic Messages |
 | `openrouter` | `https://openrouter.ai/api` | `OPENROUTER_API_KEY` | OpenAI Chat Completions |
+| `ollama` | `http://localhost:11434` | kein Key noetig | OpenAI Chat Completions |
 
 Charm Hyper spricht das Anthropic-Protokoll, `openrouter` das OpenAI-Protokoll
 - deshalb reichen zwei Implementierungen (`llm/anthropic.rs`, `llm/openai.rs`).
@@ -85,8 +86,12 @@ Zwei getrennte Speicher, mit Absicht:
 
 | Wo | Was | Wann gelesen |
 |---|---|---|
-| `~/.famulus/gedaechtnis.db` | kurze Fakten, Präferenzen, Lektionen | bei **jedem** Auftrag |
+| `~/KI Agenten/famulus/gedaechtnis.db` | kurze Fakten, Präferenzen, Lektionen, Chat-Verlauf | bei **jedem** Auftrag |
 | Obsidian-Vault | ausführliches Wissen in Prosa | wenn das Modell es holt |
+
+In derselben Datenbank liegt seit v0.5.0 auch der durchsuchbare Chat-Verlauf
+der GUI (`src/history.rs`) - eine Datei statt zwei, damit nichts
+auseinanderlaufen kann.
 
 Käme alles in jeden Prompt, wäre der Kontext nach ein paar Wochen voll und
 teuer. Die Datenbank hält das Kurze, der Vault das Lange.
@@ -114,6 +119,20 @@ install -m 755 target/release/famulus-gui ~/.local/bin/famulus-gui
 
 Starter und Icon liegen in `~/.local/share/applications/famulus.desktop`
 bzw. `~/.local/share/icons/hicolor/*/apps/famulus.png`.
+
+**macOS:** `scripts/install-mac.sh` benutzen, nicht von Hand kopieren. Ein
+blosses `cp -a .../Famulus.app /Applications/Famulus.app` nistet sich
+selbst, wenn das Ziel schon existiert (`cp` legt dann
+`/Applications/Famulus.app/Famulus.app` an statt zu ersetzen) - das kaputte
+Bundle besteht die Signaturpruefung nicht mehr und macOS killt den Prozess
+mit `SIGKILL (Code Signature Invalid)`, auch mitten in der Arbeit, wenn eine
+laufende Instanz gerade Code-Seiten von der veraenderten Datei nachlaedt.
+Das Skript beendet eine laufende Instanz zuerst, ersetzt das Bundle
+komplett und startet genau einmal neu:
+
+```bash
+./scripts/install-mac.sh
+```
 
 ## Was als Nächstes kommt (Phase 3)
 

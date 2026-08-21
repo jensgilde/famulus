@@ -12,6 +12,8 @@
 
 pub mod agent;
 pub mod config;
+/// Chat-Verlauf mit Volltextsuche (SQLite)
+pub mod history;
 pub mod llm;
 pub mod memory;
 /// System-Prompt-Presets mit Dropdown-Umschaltung

@@ -5,6 +5,43 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] – 2026-08-22
+
+### Hinzugefügt
+- **Chat-Verlauf mit Volltextsuche**: `src/history.rs` legt die Chats in
+  derselben `gedaechtnis.db` ab wie die Erinnerungen. Alte
+  `localStorage`-Chats werden beim ersten Start automatisch übernommen.
+  Neue Tauri-Commands: `history_liste`, `history_suche`,
+  `history_speichern`, `history_loeschen`, `history_archiv_liste`,
+  `history_archivieren`.
+
+### Behoben
+- **Wiederholte Crashes durch kaputtes App-Bundle**: `/Applications/Famulus.app`
+  enthielt ein verschachteltes `Famulus.app/Famulus.app`, weil ein
+  Neu-Install per `cp -a Famulus.app /Applications/Famulus.app` in ein
+  bereits bestehendes Zielverzeichnis kopiert hat, statt es zu ersetzen.
+  `codesign --verify` schlug dadurch mit "unsealed contents present in the
+  bundle root" fehl, und macOS killte den Prozess mit
+  `SIGKILL (Code Signature Invalid)` - sowohl beim Start ("Taskgated
+  Invalid Signature") als auch mitten in der Arbeit, wenn eine laufende
+  Instanz Code-Seiten von der inzwischen veränderten Datei nachlud. Das
+  erklärt auch die mehrfachen Dock-Icons bei wiederholten
+  Start-Versuchen.
+- **Fix**: `/Applications/Famulus.app` bereinigt und `scripts/install-mac.sh`
+  ergänzt - baut mit `cargo tauri build --bundles app`, beendet eine
+  laufende Instanz zuerst, entfernt die alte Installation komplett
+  (`rm -rf`) statt hineinzukopieren, und startet danach genau einmal neu.
+- **Versions-Drift**: `gui/Cargo.toml` stand noch auf `0.3.0`, während
+  `Cargo.toml` und `gui/tauri.conf.json` schon `0.4.0` waren. Alle drei
+  jetzt synchron auf `0.5.0`.
+
+### Geändert
+- README.md: `ollama` in die Provider-Tabelle ergänzt, Gedächtnis-Pfad
+  korrigiert (`~/KI Agenten/famulus/gedaechtnis.db`, nicht
+  `~/.famulus/gedaechtnis.db`), macOS-Installationshinweis auf
+  `scripts/install-mac.sh` umgestellt.
+- MAC-SETUP.md: Warnung vor manuellem `cp` über ein bestehendes Bundle.
+
 ## [0.4.0] – 2026-08-21
 
 ### Hinzugefügt

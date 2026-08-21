@@ -142,6 +142,17 @@ rund 4 Minuten fürs CLI und 8 für die GUI.
 Die fertigen Programme liegen dann in `target/release/famulus` und
 `target/release/famulus-gui`.
 
+**Fuer die GUI als installierte `/Applications/Famulus.app`:** nicht von
+Hand `cp` benutzen, sondern `./scripts/install-mac.sh`. Ein rohes
+`cp -a Famulus.app /Applications/Famulus.app` nistet sich selbst, wenn das
+Ziel schon existiert, statt es zu ersetzen - das Ergebnis ist ein Bundle,
+dessen Signaturpruefung fehlschlaegt ("unsealed contents present in the
+bundle root") und das macOS mit `SIGKILL (Code Signature Invalid)` killt,
+auch waehrend die App laeuft. Das Skript baut mit `cargo tauri build
+--bundles app` (signiert automatisch mit dem in `gui/tauri.conf.json`
+hinterlegten Zertifikat), beendet eine laufende Instanz zuerst und ersetzt
+das Bundle komplett statt hineinzukopieren.
+
 ## 8. Wenn etwas hakt
 
 **`linker 'cc' not found`** → Schritt 1 wurde übersprungen oder ist

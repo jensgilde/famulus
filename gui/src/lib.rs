@@ -7,6 +7,7 @@ use famulus_core::agent::Agent;
 use famulus_core::config::Config;
 use famulus_core::llm::{self, BildAnhang, Message};
 use famulus_core::ui::{AgentEvent, Ui};
+use famulus_core::history::History;
 use famulus_core::presets::PresetsConfig;
 use std::sync::{Arc, LazyLock, Mutex};
 use tauri::{AppHandle, Emitter, State};
@@ -74,6 +75,17 @@ fn verlauf_zu_nachrichten(verlauf: Vec<VerlaufEintrag>) -> Vec<Message> {
             }
         })
         .collect()
+}
+
+// ── History-Helfer ──────────────────────────────────────────────────────
+
+fn history_db() -> History {
+    let pfad = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("KI Agenten")
+        .join("famulus")
+        .join("gedaechtnis.db");
+    History::oeffnen(&pfad).expect("History-Datenbank nicht zu öffnen")
 }
 
 // ── Tauri Commands ───────────────────────────────────────────────────────
@@ -451,6 +463,79 @@ fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+// ── History (Chat-Verlauf mit Suche) ─────────────────────────────────────
+
+#[tauri::command]
+fn history_liste() -> Result<Vec<serde_json::Value>, String> {
+    let db = history_db();
+    let eintraege = db.liste().map_err(|e| format!("{e:#}"))?;
+    Ok(eintraege.iter().map(|e| {
+        serde_json::json!({
+            "id": e.id,
+            "titel": e.titel,
+            "nachrichten": e.nachrichten,
+            "erstellt": e.erstellt,
+            "geaendert": e.geaendert,
+            "archiviert": e.archiviert,
+        })
+    }).collect())
+}
+
+#[tauri::command]
+fn history_suche(begriff: String) -> Result<Vec<serde_json::Value>, String> {
+    let db = history_db();
+    let eintraege = db.suche(&begriff).map_err(|e| format!("{e:#}"))?;
+    Ok(eintraege.iter().map(|e| {
+        serde_json::json!({
+            "id": e.id,
+            "titel": e.titel,
+            "nachrichten": e.nachrichten,
+            "erstellt": e.erstellt,
+            "geaendert": e.geaendert,
+            "archiviert": e.archiviert,
+        })
+    }).collect())
+}
+
+#[tauri::command]
+fn history_speichern(id: Option<i64>, titel: String, nachrichten: String) -> Result<i64, String> {
+    let db = history_db();
+    if let Some(id) = id {
+        db.aktualisieren(id, &titel, &nachrichten).map_err(|e| format!("{e:#}"))?;
+        Ok(id)
+    } else {
+        db.speichern(&titel, &nachrichten).map_err(|e| format!("{e:#}"))
+    }
+}
+
+#[tauri::command]
+fn history_loeschen(id: i64) -> Result<(), String> {
+    let db = history_db();
+    db.loeschen(id).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn history_archiv_liste() -> Result<Vec<serde_json::Value>, String> {
+    let db = history_db();
+    let eintraege = db.archiv_liste().map_err(|e| format!("{e:#}"))?;
+    Ok(eintraege.iter().map(|e| {
+        serde_json::json!({
+            "id": e.id,
+            "titel": e.titel,
+            "nachrichten": e.nachrichten,
+            "erstellt": e.erstellt,
+            "geaendert": e.geaendert,
+            "archiviert": e.archiviert,
+        })
+    }).collect())
+}
+
+#[tauri::command]
+fn history_archivieren(id: i64, archiviert: bool) -> Result<(), String> {
+    let db = history_db();
+    db.archivieren(id, archiviert).map_err(|e| format!("{e:#}"))
+}
+
 /// Remote-Presets: fragt den Mac über WebSocket.
 #[tauri::command]
 async fn remote_presets_liste() -> Result<serde_json::Value, String> {
@@ -519,6 +604,12 @@ pub fn run() {
             remote_presets_loeschen,
             remote_version,
             ist_ios,
+            history_liste,
+            history_suche,
+            history_speichern,
+            history_loeschen,
+            history_archiv_liste,
+            history_archivieren,
         ])
         .run(tauri::generate_context!())
         .expect("Famulus-Fenster konnte nicht gestartet werden");
