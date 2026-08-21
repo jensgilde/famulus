@@ -1053,6 +1053,9 @@ listen('famulus-ereignis', e => {
   await ladeModelle();
   await ladeCredits();
   renderAlles();
+  // Credits laufen auch außerhalb dieses Fensters weg (CLI, anderes Gerät) -
+  // regelmäßig neu abfragen statt nur bei eigenen Aktionen.
+  setInterval(ladeCredits, 30000);
 })();
 </script>
 </body>

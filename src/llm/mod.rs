@@ -191,7 +191,7 @@ pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn 
         // im Text ignoriert, aber die Antwort kommt trotzdem an.
         "ollama" => Ok(Box::new(openai::OpenAiProvider::neu_ohne_key(
             "ollama",
-            modell.unwrap_or_else(|| "deepseek-r1:14b".to_string()),
+            modell.unwrap_or_else(|| "qwen3:14b".to_string()),
             basis(basis_url, "http://localhost:11434"),
             max_tokens,
             timeout,
