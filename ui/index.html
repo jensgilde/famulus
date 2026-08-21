@@ -49,6 +49,15 @@
   }
   .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+  .sidebar-toggle {
+    background: none; border: 1px solid var(--border); color: var(--text-muted);
+    width: 26px; height: 26px; border-radius: 4px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 12px;
+    transition: all .15s; flex-shrink: 0;
+  }
+  .sidebar-toggle:hover { border-color: var(--accent); color: var(--accent); }
+  .sidebar-toggle.active { border-color: var(--accent); color: var(--accent); background: var(--accent-muted); }
+
   /* ---- custom select (Provider / Modell), Obsin-Pillenform ---- */
   .model-select { position: relative; user-select: none; font-size: 11px; }
   .model-select-trigger {
@@ -75,12 +84,10 @@
   .model-select-option { padding: 6px 10px; cursor: pointer; color: var(--text-secondary); white-space: nowrap; font-size: 11px; }
   .model-select-option:hover, .model-select-option.active { background: var(--accent-muted); color: var(--text-primary); }
 
-  #credits { color: var(--success); font-size: 11px; font-weight: 600; white-space: nowrap; }
-
   /* ---- Layout ---- */
   .main-content { display: flex; flex: 1; overflow: hidden; }
 
-  .sidebar { width: 240px; background: var(--bg-sidebar); display: flex; flex-direction: column; flex-shrink: 0; transition: width .2s ease, min-width .2s ease, opacity .15s ease; }
+  .sidebar { width: 240px; min-width: 240px; background: var(--bg-sidebar); display: flex; flex-direction: column; flex-shrink: 0; transition: width .2s ease, min-width .2s ease, opacity .15s ease; }
   .left-sidebar { border-right: 1px solid var(--border); }
   .right-sidebar { border-left: 1px solid var(--border); }
   .sidebar.collapsed { width: 0; min-width: 0; padding: 0; opacity: 0; overflow: hidden; border: none; }
@@ -109,652 +116,848 @@
   .conversation-item.active { background: var(--bg-active); }
   .conv-info { overflow: hidden; flex: 1; min-width: 0; }
   .conv-title { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .conversation-item.active .conv-title { color: var(--text-primary); font-weight: 600; }
-  .conv-date { font-size: 9.5px; color: var(--text-faint); margin-top: 2px; white-space: nowrap; }
-  .conversation-item.active .conv-date { color: var(--text-muted); }
-  .conv-actions { display: flex; gap: 2px; flex-shrink: 0; margin-left: 4px; }
-  .conv-action-btn {
-    opacity: 0; font-size: 10px; color: var(--text-faint); transition: all .12s;
-    background: none; border: none; cursor: pointer; padding: 2px 3px; border-radius: 3px; flex-shrink: 0;
+  .conv-meta { font-size: 10px; color: var(--text-faint); }
+  .conv-delete {
+    background: none; border: none; color: var(--text-faint);
+    cursor: pointer; font-size: 10px; padding: 2px 4px; border-radius: 3px;
+    flex-shrink: 0; opacity: 0; transition: opacity .12s;
   }
-  .conversation-item:hover .conv-action-btn { opacity: .5; }
-  .conv-action-btn:hover { opacity: 1 !important; background: var(--bg-hover); }
-  .conv-action-btn.delete:hover { color: var(--danger); background: rgba(255,68,68,.1); }
-  .archiv-leer { padding: 12px; font-size: 11px; color: var(--text-faint); text-align: center; }
+  .conversation-item:hover .conv-delete { opacity: 1; }
+  .conv-delete:hover { color: var(--danger); background: rgba(255,68,68,0.12); }
 
-  /* ---- Chat area ---- */
-  .chat-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  #messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
-
-  .welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-muted); text-align: center; }
-  .welcome h2 { font-size: 22px; color: var(--text-primary); font-weight: 600; }
-  .welcome-logos { display: flex; gap: 14px; margin-bottom: 8px; }
-  .welcome-logo { width: 48px; height: 48px; border-radius: var(--radius-lg); background: var(--bg-tertiary); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 22px; }
-  .welcome p { font-size: 12px; max-width: 420px; text-align: center; line-height: 1.7; }
-
-  .message { display: flex; gap: 10px; max-width: 88%; }
-  .message.user { align-self: flex-end; flex-direction: row-reverse; }
-  .message.assistant, .message.fehler { align-self: flex-start; }
-
-  .message-avatar { width: 26px; height: 26px; border-radius: var(--radius); background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; border: 1px solid var(--border); }
-  .message.user .message-avatar { background: var(--accent-muted); border-color: rgba(255,105,180,.25); }
-
-  .message-bubble { padding: 10px 14px; border-radius: var(--radius-lg); font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
-  .message.user .message-bubble { background: var(--accent-muted); border: 1px solid rgba(255,105,180,.12); color: var(--text-primary); }
-  .message.assistant .message-bubble { background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); }
-  .message.fehler .message-bubble { background: var(--surface); border: 1px solid rgba(255,68,68,.3); color: var(--text-primary); }
-
-  /* ---- Agent-Steps-Box ---- */
-  .agent-steps-box { padding: 8px 12px; font-size: 11.5px; background: var(--bg-code); border: 1px solid var(--border-hover); border-radius: var(--radius-lg); max-width: 88%; align-self: flex-start; margin-top: -8px; }
-  .agent-steps-header { color: var(--accent); font-weight: 600; margin-bottom: 6px; }
-  .agent-step-row { cursor: pointer; display: flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 11.5px; margin-bottom: 2px; }
-  .agent-step-row:hover { color: var(--text-secondary); }
-  .agent-step-row .step-icon { color: var(--accent); font-size: 11px; }
-  .agent-step-detail { margin-left: 18px; margin-top: 3px; }
-  .agent-step-detail .label { color: var(--text-faint); font-size: 10px; margin-bottom: 1px; }
-  .agent-step-detail pre { background: #000; padding: 4px 8px; border-radius: 3px; font-size: 10.5px; color: var(--text-secondary); overflow-x: auto; margin: 2px 0; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
-  .denkt-zeile { margin-top: 4px; color: var(--text-muted); font-size: 11px; font-style: italic; }
-  .gedaechtnis-zeile { color: var(--text-faint); font-size: 10.5px; margin-top: 2px; }
-
-  /* ---- Input ---- */
-  .input-area { border-top: 1px solid var(--border); padding: 10px 16px 14px; background: var(--bg-secondary); flex-shrink: 0; }
-  .input-wrapper { display: flex; gap: 8px; align-items: flex-end; }
-  .input-wrapper textarea {
-    flex: 1; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-lg);
-    color: var(--text-primary); font-family: inherit; font-size: 12.5px; padding: 10px 14px;
-    resize: none; outline: none; transition: border-color .2s; min-height: 40px; max-height: 180px; line-height: 1.5;
+  .conv-restore {
+    background: none; border: none; color: var(--text-faint);
+    cursor: pointer; font-size: 10px; padding: 2px 4px; border-radius: 3px;
+    flex-shrink: 0; opacity: 0; transition: opacity .12s;
   }
-  .input-wrapper textarea:focus { border-color: var(--accent); }
-  .input-wrapper textarea::placeholder { color: var(--text-faint); }
-  .input-wrapper textarea:disabled { opacity: .5; }
+  .conversation-item:hover .conv-restore { opacity: 1; }
+  .conv-restore:hover { color: var(--success); background: rgba(0,204,102,0.12); }
 
-  .send-button { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--accent); background: var(--accent); color: #000; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 15px; transition: all .15s; flex-shrink: 0; font-weight: 700; }
-  .send-button:hover:not(:disabled) { background: var(--accent-hover); transform: scale(1.05); }
-  .send-button:active:not(:disabled) { transform: scale(.95); opacity: .8; }
-  .send-button:disabled { opacity: .2; cursor: not-allowed; transform: none; }
-  .send-button.stop { border-color: var(--danger); background: var(--danger); color: #fff; }
-  .send-button.stop:hover { background: #ff6666; }
+  /* ---- Chat Area ---- */
+  .chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 
-  /* ---- Status bar ---- */
-  .statusbar { height: 26px; background: var(--bg-secondary); border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
-  .statusbar-left { display: flex; align-items: center; gap: 10px; }
-  .statusbar-right { display: flex; align-items: center; gap: 12px; }
-  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
-  .status-dot.offline { background: var(--text-faint); }
-  .status-dot.denkt { background: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .messages { flex: 1; overflow-y: auto; padding: 16px 20px; }
 
-  /* ---- Fehlerbanner ---- */
-  .fehler-banner { background: var(--accent-muted); border-bottom: 1px solid rgba(255,105,180,.15); padding: 6px 14px; font-size: 11px; color: var(--text-secondary); text-align: center; flex-shrink: 0; }
+  .msg { margin-bottom: 16px; animation: fadeIn .2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .msg.user { text-align: right; }
+  .msg.assistant { text-align: left; }
+  .msg.fehler { text-align: left; }
+
+  .msg-role {
+    font-size: 10px; font-weight: 700; letter-spacing: .06em;
+    margin-bottom: 4px; text-transform: uppercase;
+  }
+  .msg.user .msg-role { color: var(--accent); }
+  .msg.assistant .msg-role { color: var(--text-muted); }
+  .msg.fehler .msg-role { color: var(--danger); }
+
+  .msg-bubble {
+    display: inline-block; max-width: 85%; text-align: left;
+    padding: 10px 14px; border-radius: var(--radius-lg);
+    font-size: 13px; line-height: 1.6; word-break: break-word;
+  }
+  .msg.user .msg-bubble { background: var(--accent-muted); color: var(--text-primary); }
+  .msg.assistant .msg-bubble { background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); }
+  .msg.fehler .msg-bubble { background: rgba(255,68,68,0.08); color: var(--danger); border: 1px solid rgba(255,68,68,0.2); }
+
+  .msg-bubble p { margin: 0 0 6px; }
+  .msg-bubble p:last-child { margin-bottom: 0; }
+  .msg-bubble ul, .msg-bubble ol { margin: 4px 0; padding-left: 18px; }
+  .msg-bubble li { margin-bottom: 2px; }
+  .msg-bubble strong { color: var(--text-primary); font-weight: 700; }
+  .msg-bubble em { color: var(--text-secondary); }
+  .msg-bubble a { color: var(--accent); }
+  .msg-bubble code {
+    background: var(--bg-code); padding: 1px 5px; border-radius: 3px;
+    font-size: 12px; color: var(--accent);
+  }
+
+  .denkt-text {
+    font-size: 12px; color: var(--text-faint); font-style: italic;
+    padding: 8px 14px; margin-bottom: 4px;
+  }
+
+  .agent-steps { margin-bottom: 8px; }
+  .agent-step {
+    font-size: 11px; color: var(--text-muted); padding: 4px 12px;
+    cursor: pointer; display: flex; gap: 6px; align-items: flex-start;
+    border-left: 2px solid var(--border); margin-left: 4px;
+  }
+  .agent-step:hover { color: var(--text-secondary); }
+  .agent-step .step-icon { flex-shrink: 0; }
+  .step-body { overflow: hidden; }
+  .step-name { font-weight: 600; color: var(--text-secondary); }
+  .step-result {
+    display: none; margin-top: 4px; font-size: 10px; color: var(--text-faint);
+    background: var(--bg-code); padding: 4px 8px; border-radius: 3px;
+    white-space: pre-wrap; max-height: 120px; overflow-y: auto;
+  }
+  .agent-step.open .step-result { display: block; }
+
+  .anhaenge-vorschau {
+    display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 20px 0;
+  }
+  .thumb {
+    position: relative; width: 48px; height: 48px; border-radius: 4px;
+    overflow: hidden; border: 1px solid var(--border);
+  }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .thumb-remove {
+    position: absolute; top: 0; right: 0;
+    background: rgba(0,0,0,0.7); border: none; color: var(--danger);
+    width: 16px; height: 16px; font-size: 10px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .input-area { padding: 8px 20px 12px; }
+  .input-row {
+    display: flex; align-items: flex-end; gap: 8px;
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 6px 8px;
+  }
+  #eingabe {
+    flex: 1; background: none; border: none;
+    color: var(--text-primary);
+    padding: 10px 14px; font-size: 13px; font-family: inherit;
+    resize: none; outline: none; min-height: 42px; max-height: 180px;
+    transition: border-color .2s; line-height: 1.5;
+  }
+  #eingabe:focus { border-color: var(--accent); }
+  #eingabe::placeholder { color: var(--text-faint); }
+
+  .upload-btn {
+    background: none; border: 1px solid var(--border);
+    color: var(--text-muted); width: 36px; height: 36px;
+    border-radius: 50%; cursor: pointer; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .15s; flex-shrink: 0;
+  }
+  .upload-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  #senden {
+    background: var(--accent); border: none; color: #000;
+    width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+    font-size: 14px; font-weight: 700; flex-shrink: 0;
+    transition: background .15s, transform .1s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #senden:hover { background: var(--accent-hover); }
+  #senden:active { transform: scale(0.95); }
+  #senden.stopp { background: var(--danger); color: #fff; }
+
+  .statusbar {
+    padding: 4px 20px; font-size: 10px; color: var(--text-faint);
+    background: var(--bg-secondary); border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; flex-shrink: 0;
+  }
+
+  .code-block {
+    margin: 8px 0; background: var(--bg-code); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  .code-header {
+    padding: 4px 10px; font-size: 10px; color: var(--text-faint);
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between;
+  }
+  .code-block pre { padding: 10px; margin: 0; overflow-x: auto; font-size: 12px; }
+
+  .error-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 999;
+    background: rgba(255,68,68,0.12); color: var(--danger);
+    padding: 6px 20px; font-size: 12px; text-align: center;
+    border-bottom: 1px solid rgba(255,68,68,0.2);
+  }
+
+  .drop-overlay {
+    display: none; position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,0.6); align-items: center; justify-content: center;
+  }
+  .drop-overlay.dragging { display: flex; }
+  .drop-hint {
+    font-size: 24px; color: var(--accent); font-weight: 700;
+    padding: 40px 60px; border: 3px dashed var(--accent);
+    border-radius: var(--radius-lg); background: rgba(0,0,0,0.8);
+  }
+
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--text-faint); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; margin-right: 4px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
 </style>
 </head>
 <body>
 
+<div class="drop-overlay" id="dropOverlay"><div class="drop-hint">📎 Loslassen zum Hochladen</div></div>
+
 <div id="app">
-
-  <div id="fehlerBanner" class="fehler-banner" style="display:none;"></div>
-
   <div class="toolbar">
     <div class="toolbar-left">
-      <button class="icon-btn" id="toggleLinks" title="Chats ein-/ausblenden">▶</button>
-      <span class="toolbar-title" id="toolbar-version">FAMULUS</span>
+      <button class="sidebar-toggle" id="leftSidebarToggle" title="Chats ein-/ausblenden">☰</button>
+      <span class="toolbar-title" id="versionDisplay">FAMULUS</span>
     </div>
     <div class="toolbar-right">
-      <button class="icon-btn" id="toggleRechts" title="Archiv ein-/ausblenden">◀</button>
-      <div class="model-select" id="provider-cs">
-        <div class="model-select-trigger" id="provider-trigger">Hyper</div>
-        <div class="model-select-dropdown" id="provider-dropdown"></div>
+      <div class="model-select" id="providerSelect">
+        <div class="model-select-trigger" id="providerTrigger">hyper</div>
+        <div class="model-select-dropdown" id="providerDropdown"></div>
       </div>
-      <div class="model-select" id="modell-cs">
-        <div class="model-select-trigger" id="modell-trigger">Modelle laden …</div>
-        <div class="model-select-dropdown" id="modell-dropdown"></div>
+      <div class="model-select" id="modelSelect">
+        <div class="model-select-trigger" id="modelTrigger">Modell</div>
+        <div class="model-select-dropdown" id="modelDropdown"></div>
       </div>
-      <span class="status-dot" id="konfigDot"></span>
+      <button class="sidebar-toggle" id="rightSidebarToggle" title="Archiv ein-/ausblenden">◫</button>
     </div>
   </div>
 
   <div class="main-content">
-
-    <div class="sidebar left-sidebar collapsed" id="sidebarLinks">
-      <div class="sidebar-header">
-        <span>Chats</span>
-        <button class="new-chat-btn" id="neuerChatBtn" title="Neuer Chat">+</button>
-      </div>
-      <div class="conversation-list" id="chatListe"></div>
+    <div class="sidebar left-sidebar collapsed" id="leftSidebar">
+      <div class="sidebar-header">Chats <button class="new-chat-btn" id="neuerChatBtn" title="Neuer Chat">+</button></div>
+      <div class="conversation-list" id="conversationList"></div>
     </div>
-
     <div class="chat-area">
-      <div id="messages"></div>
-
+      <div class="messages" id="messages"></div>
       <div class="input-area">
-        <div class="input-wrapper">
-          <textarea id="eingabe" placeholder="Auftrag eingeben … (⏎ senden, ⇧⏎ Zeilenumbruch)" rows="1" autofocus></textarea>
-          <button id="senden" class="send-button">↑</button>
+        <div class="anhaenge-vorschau" id="anhaengeVorschau"></div>
+        <div class="input-row">
+          <input type="file" id="dateiEingabe" accept="image/*" multiple style="display:none" />
+          <button class="upload-btn" id="uploadBtn" title="Bild anhängen (auch: Strg+V oder Drag & Drop)">📎</button>
+          <textarea id="eingabe" placeholder="Schreib Famulus einen Auftrag…" rows="1"></textarea>
+          <button id="senden">↑</button>
         </div>
       </div>
-    </div>
-
-    <div class="sidebar right-sidebar collapsed" id="sidebarRechts">
-      <div class="sidebar-header">
-        <span>Archiv</span>
-        <span id="archivAnzahl" style="font-size:9px;color:var(--text-faint);">0</span>
+      <div class="statusbar">
+        <span id="status">Bereit</span>
+        <span id="zustand">Lade…</span>
+        <span id="credits"></span>
       </div>
-      <div class="conversation-list" id="archivListe"></div>
     </div>
-
-  </div>
-
-  <div class="statusbar">
-    <div class="statusbar-left">
-      <span class="status-dot" id="statusDot"></span>
-      <span id="statusText">Bereit</span>
-      <span>·</span><span id="nachrichtenAnzahl">0 Nachrichten</span>
-      <span>·</span><span id="zustand">lädt …</span>
-    </div>
-    <div class="statusbar-right">
-      <span id="credits">—</span>
+    <div class="sidebar right-sidebar collapsed" id="rightSidebar">
+      <div class="sidebar-header">Archiv</div>
+      <div class="conversation-list" id="archivedList"></div>
     </div>
   </div>
-
 </div>
 
 <script>
-const { invoke } = window.__TAURI__.core;
-const { listen }  = window.__TAURI__.event;
+const { invoke } = window.__TAURI__?.core ?? {};
+const { listen } = window.__TAURI__?.event ?? {};
 
-const STORAGE_KEY = 'famulus-ui-chats';
+// ── Zustand ──────────────────────────────────────────────────────────────
+let chats = [];
+let archivedChats = [];
+let aktiverChatId = null;
+let laeuft = false;
+let aktuellerDenktText = '';
+let aktuellerAgentSchritte = [];
+let aktuelleProvider = 'hyper';
+let aktuellesModell = '';
+let istIOS = false;
 
+// ── Anhänge (Bilder/Dateien, die vor dem Senden gesammelt werden) ────────
+let anhaenge = []; // { name, medien_typ, base64, dataUrl }
+
+// ── DOM ──────────────────────────────────────────────────────────────────
 const messagesEl = document.getElementById('messages');
 const eingabe = document.getElementById('eingabe');
 const senden = document.getElementById('senden');
-const chatListeEl = document.getElementById('chatListe');
-const archivListeEl = document.getElementById('archivListe');
-const archivAnzahlEl = document.getElementById('archivAnzahl');
-const statusDot = document.getElementById('statusDot');
-const statusText = document.getElementById('statusText');
-const nachrichtenAnzahlEl = document.getElementById('nachrichtenAnzahl');
+const statusEl = document.getElementById('status');
 const zustandEl = document.getElementById('zustand');
 const creditsEl = document.getElementById('credits');
-const konfigDot = document.getElementById('konfigDot');
-const fehlerBanner = document.getElementById('fehlerBanner');
+const conversationList = document.getElementById('conversationList');
+const archivedList = document.getElementById('archivedList');
+const versionDisplay = document.getElementById('versionDisplay');
+const anhaengeVorschau = document.getElementById('anhaengeVorschau');
+const uploadBtn = document.getElementById('uploadBtn');
+const dateiEingabe = document.getElementById('dateiEingabe');
+const dropOverlay = document.getElementById('dropOverlay');
+const leftSidebar = document.getElementById('leftSidebar');
+const rightSidebar = document.getElementById('rightSidebar');
+const leftSidebarToggle = document.getElementById('leftSidebarToggle');
+const rightSidebarToggle = document.getElementById('rightSidebarToggle');
 
-let laeuft = false;
-let istIOS = false;       // Auf dem iPad: Auftraege gehen ueber Tailscale zum Mac
-let aktuelleProvider = 'hyper';
-let aktuellesModell = '';
-let alleModelle = [];
-let creditsTimer = null;
-let aktuellerAgentSchritte = []; // laufende Werkzeug-Schritte des aktiven Auftrags
-let aktuellerDenktText = '';
-let aufgeklappteSchritte = new Set();
+// ── Persistenz ───────────────────────────────────────────────────────────
+const LS_KEY = 'famulus-chats';
+const LS_ARCHIV = 'famulus-archiv';
+const LS_AKTIV = 'famulus-aktiv';
+const LS_SIDEBAR = 'famulus-sidebars';
 
-// ---- Chat-Persistenz (localStorage, wie Obsin UI) ----
 function ladeChats() {
   try {
-    const r = localStorage.getItem(STORAGE_KEY);
-    return r ? JSON.parse(r) : [];
-  } catch { return []; }
-}
-function speichereChats() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(chats)); } catch {} }
-
-function neuerLeererChat() {
-  return { id: crypto.randomUUID(), titel: 'Neuer Chat', nachrichten: [], erstellt: Date.now(), archiviert: false };
-}
-
-let chats = ladeChats();
-if (chats.length === 0) chats = [neuerLeererChat()];
-let aktiverChatId = chats[0].id;
-
-function aktiverChat() { return chats.find(c => c.id === aktiverChatId); }
-function aktiveChats() { return chats.filter(c => !c.archiviert); }
-function archivierteChats() { return chats.filter(c => c.archiviert); }
-
-function formatDatum(ts) {
-  const d = new Date(ts);
-  return d.toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'2-digit'})
-    + ' ' + d.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+    chats = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+  } catch { chats = []; }
+  if (chats.length === 0) {
+    chats.push({ id: 'c1', titel: 'Neuer Chat', nachrichten: [], createdAt: Date.now() });
+  }
+  try {
+    archivedChats = JSON.parse(localStorage.getItem(LS_ARCHIV) || '[]');
+  } catch { archivedChats = []; }
+  const aid = localStorage.getItem(LS_AKTIV);
+  aktiverChatId = (aid && chats.find(c => c.id === aid)) ? aid : chats[0].id;
 }
 
-// ---- Sidebar-Toggle ----
-document.getElementById('toggleLinks').addEventListener('click', () => {
-  const el = document.getElementById('sidebarLinks');
-  el.classList.toggle('collapsed');
-  document.getElementById('toggleLinks').textContent = el.classList.contains('collapsed') ? '▶' : '◀';
-});
-document.getElementById('toggleRechts').addEventListener('click', () => {
-  const el = document.getElementById('sidebarRechts');
-  el.classList.toggle('collapsed');
-  document.getElementById('toggleRechts').textContent = el.classList.contains('collapsed') ? '◀' : '▶';
-});
+function speichereChats() {
+  localStorage.setItem(LS_KEY, JSON.stringify(chats));
+  localStorage.setItem(LS_ARCHIV, JSON.stringify(archivedChats));
+  localStorage.setItem(LS_AKTIV, aktiverChatId);
+}
 
-// ---- Custom Select (Provider/Modell) ----
-function initSelect(csId) {
-  const cs = document.getElementById(csId);
-  cs.querySelector('.model-select-trigger').addEventListener('click', (e) => {
-    e.stopPropagation();
-    document.querySelectorAll('.model-select.open').forEach(c => { if (c !== cs) c.classList.remove('open'); });
-    cs.classList.toggle('open');
+function aktiverChat() {
+  let c = chats.find(c => c.id === aktiverChatId);
+  if (!c) { aktiverChatId = chats[0].id; c = chats[0]; }
+  return c;
+}
+
+// ── Sidebar Toggle ───────────────────────────────────────────────────────
+
+function ladeSidebarZustand() {
+  try {
+    const z = JSON.parse(localStorage.getItem(LS_SIDEBAR) || '{}');
+    return { left: z.left !== undefined ? z.left : true, right: z.right !== undefined ? z.right : true };
+  } catch { return { left: true, right: true }; }
+}
+
+function speichereSidebarZustand(z) {
+  localStorage.setItem(LS_SIDEBAR, JSON.stringify(z));
+}
+
+function setzeSidebar(seite, offen) {
+  const sidebar = seite === 'left' ? leftSidebar : rightSidebar;
+  const toggle = seite === 'left' ? leftSidebarToggle : rightSidebarToggle;
+  if (offen) {
+    sidebar.classList.remove('collapsed');
+    toggle.classList.add('active');
+  } else {
+    sidebar.classList.add('collapsed');
+    toggle.classList.remove('active');
+  }
+  const z = ladeSidebarZustand();
+  z[seite] = offen;
+  speichereSidebarZustand(z);
+}
+
+function toggleSidebar(seite) {
+  const sidebar = seite === 'left' ? leftSidebar : rightSidebar;
+  const istOffen = !sidebar.classList.contains('collapsed');
+  setzeSidebar(seite, !istOffen);
+}
+
+leftSidebarToggle.addEventListener('click', () => toggleSidebar('left'));
+rightSidebarToggle.addEventListener('click', () => toggleSidebar('right'));
+
+function initSidebars() {
+  const z = ladeSidebarZustand();
+  setzeSidebar('left', z.left);
+  setzeSidebar('right', z.right);
+}
+
+// ── Anhänge ──────────────────────────────────────────────────────────────
+
+function fileZuBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const parts = dataUrl.split(',');
+      const base64 = parts[1] || '';
+      const medien_typ = (dataUrl.match(/^data:(.*?);/) || ['','application/octet-stream'])[1];
+      resolve({ name: file.name, medien_typ, base64, dataUrl });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
   });
-  document.addEventListener('click', () => cs.classList.remove('open'));
 }
-function fillDropdown(dropdownId, options, selectedValue, onChange) {
-  const dropdown = document.getElementById(dropdownId);
-  dropdown.innerHTML = '';
-  options.forEach(opt => {
+
+function anhaengeHinzufuegen(neue) {
+  anhaenge.push(...neue);
+  renderAnhaenge();
+}
+
+function anhangEntfernen(idx) {
+  anhaenge.splice(idx, 1);
+  renderAnhaenge();
+}
+
+function renderAnhaenge() {
+  anhaengeVorschau.innerHTML = '';
+  anhaenge.forEach((a, i) => {
     const div = document.createElement('div');
-    div.className = 'model-select-option';
-    if (opt.value === selectedValue) div.classList.add('active');
-    div.textContent = opt.label;
-    div.addEventListener('click', () => {
-      onChange && onChange(opt.value);
-      dropdown.parentElement.classList.remove('open');
-    });
-    dropdown.appendChild(div);
-  });
-}
-function setTrigger(triggerId, text) { document.getElementById(triggerId).textContent = text; }
-
-const providerOptions = [
-  { value: 'hyper', label: 'Hyper' },
-  { value: 'openrouter', label: 'OpenRouter' },
-];
-initSelect('provider-cs');
-initSelect('modell-cs');
-
-async function providerWechsel(value) {
-  aktuelleProvider = value;
-  setTrigger('provider-trigger', providerOptions.find(p => p.value === value)?.label || value);
-  await ladeModelleFuerProvider(value);
-  if (alleModelle.length > 0) {
-    aktuellesModell = alleModelle[0].id;
-    setTrigger('modell-trigger', modellName(alleModelle[0]));
-  }
-  await setzeModell(value, aktuellesModell);
-}
-fillDropdown('provider-dropdown', providerOptions, aktuelleProvider, providerWechsel);
-
-// Hyper liefert pricing.input/output schon als $ pro 1M Token. OpenRouter
-// liefert stattdessen pricing.prompt/completion als $ pro einzelnem Token -
-// erst auf dieselbe Einheit hochrechnen, sonst zeigt der Dropdown für jedes
-// OpenRouter-Modell nur "$?/$?" (die Felder heißen dort schlicht anders).
-function preisProMillion(m) {
-  const p = m.pricing || {};
-  if (p.input != null || p.output != null) {
-    return { ein: p.input, aus: p.output };
-  }
-  const proToken = (wert) => {
-    const zahl = parseFloat(wert);
-    return Number.isFinite(zahl) ? (zahl * 1_000_000).toFixed(2) : null;
-  };
-  return { ein: proToken(p.prompt), aus: proToken(p.completion) };
-}
-
-function modellName(m) {
-  return m.display_name || m.name || m.id;
-}
-
-async function ladeModelleFuerProvider(provider) {
-  try {
-    alleModelle = await invoke(istIOS ? 'remote_modelle_liste' : 'modelle_liste', { provider });
-    const opts = alleModelle.map(m => {
-      const preis = preisProMillion(m);
-      return {
-        value: m.id,
-        label: `${modellName(m)} ($${preis.ein ?? '?'}/$${preis.aus ?? '?'} pro 1M)`
-      };
-    });
-    fillDropdown('modell-dropdown', opts, aktuellesModell, async (value) => {
-      aktuellesModell = value;
-      const m = alleModelle.find(x => x.id === value);
-      setTrigger('modell-trigger', modellName(m) || value);
-      await setzeModell(aktuelleProvider, value);
-    });
-  } catch (e) {
-    document.getElementById('modell-dropdown').innerHTML = '<div class="model-select-option">Fehler</div>';
-    console.error('Modelle:', e);
-  }
-}
-
-async function setzeModell(provider, model) {
-  if (!model) return;
-  try {
-    const neu = await invoke(istIOS ? 'remote_setze_modell' : 'setze_modell', { provider, model });
-    zustandEl.textContent = neu;
-    konfigDot.classList.remove('offline');
-    ladeCredits();
-  } catch (e) {
-    zeigeFehlerBanner('Modellwechsel fehlgeschlagen: ' + e);
-  }
-}
-
-function zeigeFehlerBanner(text) {
-  fehlerBanner.textContent = '⚠️ ' + text;
-  fehlerBanner.style.display = 'block';
-}
-
-async function ladeCredits() {
-  try {
-    const c = await invoke(istIOS ? 'remote_credits' : 'credits');
-    creditsEl.textContent = c === 'n/a' ? '—' : c;
-  } catch (e) {
-    creditsEl.textContent = '—';
-  }
-}
-function starteCreditsTimer() {
-  if (creditsTimer) clearInterval(creditsTimer);
-  creditsTimer = setInterval(ladeCredits, 30000);
-}
-
-// ---- Init ----
-invoke('ist_ios').then(ios => { istIOS = ios; return invoke(istIOS ? 'remote_zustand' : 'zustand'); })
-  .then(t => {
-    zustandEl.textContent = t;
-    // Version abrufen
-    invoke(istIOS ? 'remote_version' : 'version').then(v => {
-      document.getElementById('toolbar-version').textContent = 'FAMULUS v' + v;
-    }).catch(() => {});
-    const parts = t.split(' · ');
-    if (parts.length >= 2) { aktuelleProvider = parts[0].trim(); aktuellesModell = parts[1].trim(); }
-    const pl = providerOptions.find(p => p.value === aktuelleProvider);
-    setTrigger('provider-trigger', pl ? pl.label : aktuelleProvider);
-    fillDropdown('provider-dropdown', providerOptions, aktuelleProvider, providerWechsel);
-    return ladeModelleFuerProvider(aktuelleProvider);
-  })
-  .then(() => {
-    const m = alleModelle.find(x => x.id === aktuellesModell);
-    if (m) setTrigger('modell-trigger', modellName(m));
-  })
-  .catch(e => {
-    zustandEl.textContent = 'Konfiguration fehlerhaft';
-    konfigDot.classList.add('offline');
-    zeigeFehlerBanner('Konfiguration fehlerhaft: ' + e);
-  })
-  .finally(() => {
-    ladeCredits();
-    starteCreditsTimer();
-    renderAlles();
-  });
-
-// ---- Rendering ----
-function renderAlles() {
-  renderChatListe();
-  renderArchivListe();
-  renderMessages();
-  renderStatusbar();
-}
-
-function chatItem(c, aktiv, aktionen) {
-  const div = document.createElement('div');
-  div.className = 'conversation-item' + (aktiv ? ' active' : '');
-  div.innerHTML = `
-    <div class="conv-info">
-      <div class="conv-title"></div>
-      <div class="conv-date"></div>
-    </div>
-    <div class="conv-actions"></div>`;
-  div.querySelector('.conv-title').textContent = c.titel;
-  div.querySelector('.conv-date').textContent = formatDatum(c.erstellt);
-  const actions = div.querySelector('.conv-actions');
-  aktionen.forEach(([symbol, titel, klasse, fn]) => {
-    const btn = document.createElement('button');
-    btn.className = 'conv-action-btn' + (klasse ? ' ' + klasse : '');
-    btn.title = titel;
-    btn.textContent = symbol;
-    btn.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
-    actions.appendChild(btn);
-  });
-  return div;
-}
-
-function renderChatListe() {
-  chatListeEl.innerHTML = '';
-  aktiveChats().forEach(c => {
-    const item = chatItem(c, c.id === aktiverChatId, [
-      ['📥', 'Archivieren', '', () => chatArchivieren(c.id)],
-      ['✕', 'Löschen', 'delete', () => chatLoeschen(c.id)],
-    ]);
-    item.addEventListener('click', () => chatWechseln(c.id));
-    chatListeEl.appendChild(item);
+    div.className = 'thumb';
+    const img = document.createElement('img');
+    img.src = a.dataUrl;
+    img.alt = a.name;
+    img.title = a.name;
+    const rm = document.createElement('button');
+    rm.className = 'thumb-remove';
+    rm.textContent = '✕';
+    rm.onclick = () => anhangEntfernen(i);
+    div.appendChild(img);
+    div.appendChild(rm);
+    anhaengeVorschau.appendChild(div);
   });
 }
 
-function renderArchivListe() {
-  const archiv = archivierteChats();
-  archivAnzahlEl.textContent = archiv.length;
-  archivListeEl.innerHTML = '';
-  if (archiv.length === 0) {
-    archivListeEl.innerHTML = '<div class="archiv-leer">Keine archivierten Chats.<br>Mit 📥 hierher verschieben.</div>';
-    return;
+// ── Drag & Drop ──────────────────────────────────────────────────────────
+let dragCounter = 0;
+document.addEventListener('dragenter', e => { e.preventDefault(); dragCounter++; dropOverlay.classList.add('dragging'); });
+document.addEventListener('dragleave', e => { e.preventDefault(); dragCounter--; if (dragCounter <= 0) { dragCounter = 0; dropOverlay.classList.remove('dragging'); } });
+document.addEventListener('dragover', e => { e.preventDefault(); });
+document.addEventListener('drop', async e => {
+  e.preventDefault();
+  dragCounter = 0;
+  dropOverlay.classList.remove('dragging');
+  const files = Array.from(e.dataTransfer.files);
+  if (files.length === 0) return;
+  const neue = [];
+  for (const f of files) {
+    if (f.type.startsWith('image/')) {
+      neue.push(await fileZuBase64(f));
+    }
   }
-  archiv.forEach(c => {
-    const item = chatItem(c, false, [
-      ['📤', 'Wiederherstellen', '', () => chatWiederherstellen(c.id)],
-      ['✕', 'Endgültig löschen', 'delete', () => chatLoeschen(c.id)],
-    ]);
-    item.addEventListener('click', () => chatWiederherstellen(c.id));
-    archivListeEl.appendChild(item);
+  if (neue.length > 0) anhaengeHinzufuegen(neue);
+});
+
+// ── Paste ────────────────────────────────────────────────────────────────
+document.addEventListener('paste', async e => {
+  const items = Array.from(e.clipboardData.items);
+  const neue = [];
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const blob = item.getAsFile();
+      if (blob) {
+        blob.name = 'paste-' + Date.now() + '.png';
+        neue.push(await fileZuBase64(blob));
+      }
+    }
+  }
+  if (neue.length > 0) anhaengeHinzufuegen(neue);
+});
+
+// ── Upload ───────────────────────────────────────────────────────────────
+uploadBtn.addEventListener('click', () => dateiEingabe.click());
+dateiEingabe.addEventListener('change', async () => {
+  const neue = [];
+  for (const f of dateiEingabe.files) {
+    neue.push(await fileZuBase64(f));
+  }
+  if (neue.length > 0) anhaengeHinzufuegen(neue);
+  dateiEingabe.value = '';
+});
+
+// ── Formatierung ─────────────────────────────────────────────────────────
+function formatText(text) {
+  if (!text) return '';
+  let escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Code-Blöcke ```
+  escaped = escaped.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const langLabel = lang || 'code';
+    return `<div class="code-block"><div class="code-header"><span>${langLabel}</span></div><pre>${code.trim()}</pre></div>`;
   });
+
+  // Inline-Code `...`
+  escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Fett **...**
+  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+  // Kursiv *...*
+  escaped = escaped.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+  // Links
+  escaped = escaped.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank">$1</a>');
+
+  // Zeilenumbrüche
+  escaped = escaped.replace(/\n/g, '<br>');
+
+  return escaped;
 }
 
-function messageDiv(rolle, avatar, text) {
-  const div = document.createElement('div');
-  div.className = 'message ' + rolle;
-  const av = document.createElement('div');
-  av.className = 'message-avatar';
-  av.textContent = avatar;
-  const bubble = document.createElement('div');
-  bubble.className = 'message-bubble';
-  bubble.textContent = text;
-  div.appendChild(av);
-  div.appendChild(bubble);
-  return div;
-}
+// ── Rendern ──────────────────────────────────────────────────────────────
 
 function renderMessages() {
-  messagesEl.innerHTML = '';
   const chat = aktiverChat();
-  if (!chat) return;
-
-  if (chat.nachrichten.length === 0) {
-    const w = document.createElement('div');
-    w.className = 'welcome';
-    w.innerHTML = `
-      <div class="welcome-logos">
-        <div class="welcome-logo">🗂️</div><div class="welcome-logo">🖥️</div><div class="welcome-logo">📓</div>
-      </div>
-      <h2>FAMULUS</h2>
-      <p>Datei- und Shell-Zugriff · Gedächtnis · Obsidian-Vault</p>
-      <p style="color:var(--text-faint);font-size:11px;"></p>`;
-    w.querySelector('p:last-child').textContent = zustandEl.textContent;
-    messagesEl.appendChild(w);
-    return;
-  }
+  messagesEl.innerHTML = '';
 
   chat.nachrichten.forEach(m => {
-    const avatar = m.rolle === 'user' ? '👤' : (m.rolle === 'fehler' ? '⚠️' : '🤖');
-    messagesEl.appendChild(messageDiv(m.rolle, avatar, m.inhalt));
+    const div = document.createElement('div');
+    div.className = 'msg ' + (m.rolle === 'user' ? 'user' : m.rolle === 'fehler' ? 'fehler' : 'assistant');
+
+    if (m.rolle === 'user') {
+      const roleEl = document.createElement('div');
+      roleEl.className = 'msg-role';
+      roleEl.textContent = 'Du';
+      div.appendChild(roleEl);
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.innerHTML = formatText(m.inhalt);
+      div.appendChild(bubble);
+
+      // Anhänge (Bilder) anzeigen, falls vorhanden
+      if (m.anhaenge && m.anhaenge.length > 0) {
+        const thumbs = document.createElement('div');
+        thumbs.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;';
+        m.anhaenge.forEach(a => {
+          const img = document.createElement('img');
+          img.src = `data:${a.medien_typ};base64,${a.base64}`;
+          img.style.cssText = 'max-width:120px;max-height:120px;border-radius:4px;border:1px solid var(--border);';
+          img.title = a.name;
+          thumbs.appendChild(img);
+        });
+        div.appendChild(thumbs);
+      }
+
+    } else if (m.rolle === 'assistant') {
+      const roleEl = document.createElement('div');
+      roleEl.className = 'msg-role';
+      roleEl.textContent = 'Famulus';
+      div.appendChild(roleEl);
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.innerHTML = formatText(m.inhalt);
+      div.appendChild(bubble);
+    } else if (m.rolle === 'fehler') {
+      const roleEl = document.createElement('div');
+      roleEl.className = 'msg-role';
+      roleEl.textContent = 'Fehler';
+      div.appendChild(roleEl);
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.textContent = m.inhalt;
+      div.appendChild(bubble);
+    }
+
+    messagesEl.appendChild(div);
   });
 
-  if (laeuft) {
-    messagesEl.appendChild(agentSchritteBox());
+  // Aktuelle Denk- und Werkzeug-Schritte
+  if (aktuellerDenktText || aktuellerAgentSchritte.length > 0) {
+    const div = document.createElement('div');
+    div.className = 'msg assistant';
+
+    if (aktuellerDenktText) {
+      const denk = document.createElement('div');
+      denk.className = 'denkt-text';
+      denk.textContent = '… ' + aktuellerDenktText;
+      div.appendChild(denk);
+    }
+
+    if (aktuellerAgentSchritte.length > 0) {
+      const steps = document.createElement('div');
+      steps.className = 'agent-steps';
+      aktuellerAgentSchritte.forEach((s, i) => {
+        const step = document.createElement('div');
+        step.className = 'agent-step' + (s.ergebnis !== null ? ' open' : '');
+        const icon = s.art === 'werkzeug' ? '⚙' : '✎';
+        step.innerHTML = `<span class="step-icon">${icon}</span><span class="step-body"><span class="step-name">${s.name || ''}</span>${s.text || ''}</span>`;
+        if (s.art === 'werkzeug' && s.ergebnis !== null) {
+          const result = document.createElement('div');
+          result.className = 'step-result';
+          result.textContent = s.ergebnis;
+          result.style.display = 'block';
+          step.appendChild(result);
+        }
+        step.addEventListener('click', () => step.classList.toggle('open'));
+        steps.appendChild(step);
+      });
+      div.appendChild(steps);
+    }
+
+    messagesEl.appendChild(div);
   }
 
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-// ---- Agent-Steps-Box: gruppiert werkzeug_aufruf+werkzeug_ergebnis, zeigt denkt/erinnert/gelernt ----
-function agentSchritteBox() {
-  const box = document.createElement('div');
-  box.className = 'agent-steps-box';
+function renderAlles() {
+  renderMessages();
+  renderConversationList();
+  renderArchivedList();
+  renderStatusbar();
+}
 
-  const werkzeugSchritte = aktuellerAgentSchritte.filter(s => s.art === 'werkzeug');
-  const header = document.createElement('div');
-  header.className = 'agent-steps-header';
-  header.textContent = werkzeugSchritte.length > 0
-    ? `⚡ Agent — ${werkzeugSchritte.length} Werkzeug${werkzeugSchritte.length !== 1 ? 'e' : ''}`
-    : '⚡ Agent';
-  box.appendChild(header);
-
-  werkzeugSchritte.forEach((s, i) => {
-    const key = i;
-    const expanded = aufgeklappteSchritte.has(key);
-    const row = document.createElement('div');
-    row.className = 'agent-step-row';
-    row.innerHTML = `<span class="step-icon">${expanded ? '▾' : '▸'}</span><span style="color:var(--accent);"></span>`;
-    row.querySelector('span:last-child').textContent = s.name;
-    row.addEventListener('click', () => {
-      if (aufgeklappteSchritte.has(key)) aufgeklappteSchritte.delete(key); else aufgeklappteSchritte.add(key);
-      renderMessages();
-    });
-    box.appendChild(row);
-    if (expanded) {
-      const detail = document.createElement('div');
-      detail.className = 'agent-step-detail';
-      detail.innerHTML = `<div class="label">Argumente:</div><pre></pre><div class="label">Ergebnis:</div><pre></pre>`;
-      const pres = detail.querySelectorAll('pre');
-      pres[0].textContent = s.argumente || '';
-      pres[1].textContent = s.ergebnis || '…';
-      box.appendChild(detail);
-    }
+function renderConversationList() {
+  conversationList.innerHTML = '';
+  chats.forEach(c => {
+    const div = document.createElement('div');
+    div.className = 'conversation-item' + (c.id === aktiverChatId ? ' active' : '');
+    div.innerHTML = `<div class="conv-info"><div class="conv-title">${c.titel || 'Neuer Chat'}</div><div class="conv-meta">${c.nachrichten.length} Nachrichten</div></div>`;
+    const del = document.createElement('button');
+    del.className = 'conv-delete';
+    del.textContent = '✕';
+    del.addEventListener('click', e => { e.stopPropagation(); chatArchivieren(c.id); });
+    div.appendChild(del);
+    div.addEventListener('click', () => chatWechseln(c.id));
+    conversationList.appendChild(div);
   });
+}
 
-  aktuellerAgentSchritte.filter(s => s.art === 'gedaechtnis').forEach(s => {
-    const zeile = document.createElement('div');
-    zeile.className = 'gedaechtnis-zeile';
-    zeile.textContent = s.text;
-    box.appendChild(zeile);
-  });
-
-  if (aktuellerDenktText) {
-    const denkt = document.createElement('div');
-    denkt.className = 'denkt-zeile';
-    denkt.textContent = aktuellerDenktText;
-    box.appendChild(denkt);
+function renderArchivedList() {
+  archivedList.innerHTML = '';
+  if (archivedChats.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:12px;font-size:11px;color:var(--text-faint);text-align:center;';
+    empty.textContent = 'Keine archivierten Chats';
+    archivedList.appendChild(empty);
+    return;
   }
-
-  return box;
+  archivedChats.forEach(c => {
+    const div = document.createElement('div');
+    div.className = 'conversation-item';
+    div.innerHTML = `<div class="conv-info"><div class="conv-title">${c.titel || 'Chat'}</div><div class="conv-meta">${c.nachrichten.length} Nachrichten</div></div>`;
+    const restore = document.createElement('button');
+    restore.className = 'conv-restore';
+    restore.textContent = '↩';
+    restore.title = 'Wiederherstellen';
+    restore.addEventListener('click', e => { e.stopPropagation(); chatWiederherstellen(c.id); });
+    div.appendChild(restore);
+    div.addEventListener('click', () => {
+      // Bei Klick auf archivierten Chat: wiederherstellen und wechseln
+      chatWiederherstellen(c.id);
+      chatWechseln(c.id);
+    });
+    archivedList.appendChild(div);
+  });
 }
 
 function renderStatusbar() {
-  const chat = aktiverChat();
-  nachrichtenAnzahlEl.textContent = (chat ? chat.nachrichten.length : 0) + ' Nachrichten';
-  statusText.textContent = laeuft
-    ? (aktuellerAgentSchritte.some(s => s.art === 'werkzeug')
-        ? `Arbeitet (${aktuellerAgentSchritte.filter(s=>s.art==='werkzeug').length} Werkzeuge)`
-        : 'Denkt …')
-    : 'Bereit';
-  statusDot.classList.toggle('denkt', laeuft);
+  if (laeuft) {
+    statusEl.innerHTML = '<span class="spinner"></span> Denkt…';
+  } else {
+    statusEl.textContent = 'Bereit';
+  }
 }
 
-// ---- Chat-Aktionen ----
+function beschaeftigt(b) {
+  laeuft = b;
+  senden.className = b ? 'stopp' : '';
+  senden.textContent = b ? '■' : '↑';
+  eingabe.disabled = b;
+  renderStatusbar();
+}
+
+function zeigeFehlerBanner(msg) {
+  const el = document.createElement('div');
+  el.className = 'error-banner';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// ── Chat-Verwaltung ──────────────────────────────────────────────────────
+
 function chatWechseln(id) {
-  if (laeuft) return; // laufenden Auftrag nicht mitten im Wechsel verlieren
   aktiverChatId = id;
-  aufgeklappteSchritte = new Set();
-  renderAlles();
-  eingabe.focus();
-}
-
-function neuerChat() {
-  const c = neuerLeererChat();
-  chats.unshift(c);
-  aktiverChatId = c.id;
   speichereChats();
   renderAlles();
-  eingabe.focus();
 }
-document.getElementById('neuerChatBtn').addEventListener('click', neuerChat);
 
 function chatArchivieren(id) {
-  const c = chats.find(x => x.id === id);
-  if (c) c.archiviert = true;
-  if (id === aktiverChatId) {
-    const rest = aktiveChats();
-    if (rest.length > 0) aktiverChatId = rest[0].id;
-    else { const n = neuerLeererChat(); chats.unshift(n); aktiverChatId = n.id; }
-  }
+  if (chats.length <= 1) return;
+  const idx = chats.findIndex(c => c.id === id);
+  if (idx === -1) return;
+  const [chat] = chats.splice(idx, 1);
+  archivedChats.push(chat);
+  if (aktiverChatId === id) aktiverChatId = chats[0].id;
   speichereChats();
   renderAlles();
 }
 
 function chatWiederherstellen(id) {
-  const c = chats.find(x => x.id === id);
-  if (c) c.archiviert = false;
+  const idx = archivedChats.findIndex(c => c.id === id);
+  if (idx === -1) return;
+  const [chat] = archivedChats.splice(idx, 1);
+  chats.push(chat);
+  speichereChats();
+  renderAlles();
+}
+
+document.getElementById('neuerChatBtn').addEventListener('click', () => {
+  const id = 'c' + Date.now();
+  chats.push({ id, titel: 'Neuer Chat', nachrichten: [], createdAt: Date.now() });
   aktiverChatId = id;
-  document.getElementById('sidebarRechts').classList.remove('collapsed');
-  document.getElementById('toggleRechts').textContent = '▶';
   speichereChats();
   renderAlles();
-}
+});
 
-function chatLoeschen(id) {
-  chats = chats.filter(c => c.id !== id);
-  if (chats.length === 0) chats = [neuerLeererChat()];
-  if (id === aktiverChatId) {
-    const aktiv = aktiveChats();
-    aktiverChatId = aktiv.length > 0 ? aktiv[0].id : chats[0].id;
+// ── Provider/Modell-Auswahl ──────────────────────────────────────────────
+
+let alleModelle = [];
+
+async function ladeModelle() {
+  try {
+    const fn = istIOS ? 'remote_modelle_liste' : 'modelle_liste';
+    const raw = await invoke(fn, { provider: aktuelleProvider });
+    const arr = Array.isArray(raw) ? raw : (raw.data || raw.models || []);
+    alleModelle = arr.map(m => ({
+      id: m.id || m.name || m.slug || '',
+      name: m.name || m.id || m.slug || '',
+      context_length: m.context_length || m.context_window || 0,
+    }));
+    alleModelle.sort((a, b) => a.id.localeCompare(b.id));
+    renderModelle();
+  } catch (e) {
+    console.error('Modelle laden fehlgeschlagen:', e);
+    zeigeFehlerBanner('Modelle konnten nicht geladen werden: ' + e);
   }
-  speichereChats();
-  renderAlles();
 }
 
-// ---- Auftrag senden ----
-function beschaeftigt(an) {
-  laeuft = an;
-  eingabe.disabled = an;
-  senden.classList.toggle('stop', an);
-  senden.textContent = an ? '■' : '↑';
-  senden.title = an ? 'Abbrechen' : '';
-  if (!an) eingabe.focus();
+function renderModelle() {
+  const dropdown = document.getElementById('modelDropdown');
+  dropdown.innerHTML = '';
+  alleModelle.forEach(m => {
+    const div = document.createElement('div');
+    div.className = 'model-select-option' + (m.id === aktuellesModell ? ' active' : '');
+    div.textContent = m.id;
+    div.addEventListener('click', async () => {
+      aktuellesModell = m.id;
+      document.getElementById('modelTrigger').textContent = m.id;
+      document.querySelectorAll('#modelDropdown .model-select-option').forEach(o => o.classList.remove('active'));
+      div.classList.add('active');
+      document.getElementById('modelSelect').classList.remove('open');
+      try {
+        const fn = istIOS ? 'remote_setze_modell' : 'setze_modell';
+        const z = await invoke(fn, { provider: aktuelleProvider, model: m.id });
+        zustandEl.textContent = z;
+      } catch (e) {
+        zeigeFehlerBanner('Modell wechseln fehlgeschlagen: ' + e);
+      }
+    });
+    dropdown.appendChild(div);
+  });
+  document.getElementById('modelTrigger').textContent = aktuellesModell || 'Modell';
 }
+
+// Provider-Dropdown
+document.getElementById('providerTrigger').addEventListener('click', () => {
+  document.getElementById('providerSelect').classList.toggle('open');
+});
+document.getElementById('modelTrigger').addEventListener('click', () => {
+  document.getElementById('modelSelect').classList.toggle('open');
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.model-select')) {
+    document.getElementById('providerSelect').classList.remove('open');
+    document.getElementById('modelSelect').classList.remove('open');
+  }
+});
+
+// Provider-Optionen
+const providerDropdown = document.getElementById('providerDropdown');
+['hyper', 'openrouter'].forEach(p => {
+  const div = document.createElement('div');
+  div.className = 'model-select-option' + (p === aktuelleProvider ? ' active' : '');
+  div.textContent = p;
+  div.addEventListener('click', () => {
+    aktuelleProvider = p;
+    document.getElementById('providerTrigger').textContent = p;
+    document.querySelectorAll('#providerDropdown .model-select-option').forEach(o => o.classList.remove('active'));
+    div.classList.add('active');
+    document.getElementById('providerSelect').classList.remove('open');
+    ladeModelle();
+  });
+  providerDropdown.appendChild(div);
+});
+
+// ── Credits / Zustand / Version ──────────────────────────────────────────
+
+async function ladeCredits() {
+  try {
+    const fn = istIOS ? 'remote_credits' : 'credits';
+    const c = await invoke(fn);
+    creditsEl.textContent = c;
+    creditsEl.style.color = c.includes('$') || c.includes('€') || c.includes('¢') ? 'var(--success)' : 'var(--success)';
+  } catch (e) {
+    creditsEl.textContent = '';
+    console.error('Credits:', e);
+  }
+}
+
+async function ladeZustand() {
+  try {
+    const fn = istIOS ? 'remote_zustand' : 'zustand';
+    const z = await invoke(fn);
+    zustandEl.textContent = z;
+  } catch (e) {
+    zustandEl.textContent = 'Offline';
+  }
+}
+
+async function ladeVersion() {
+  try {
+    const fn = istIOS ? 'remote_version' : 'version';
+    const v = await invoke(fn);
+    versionDisplay.textContent = 'FAMULUS ' + v;
+  } catch (e) {
+    versionDisplay.textContent = 'FAMULUS';
+  }
+}
+
+// ── Senden ───────────────────────────────────────────────────────────────
 
 async function los() {
-  const auftrag = eingabe.value.trim();
-  if (!auftrag || laeuft) return;
+  const text = eingabe.value.trim();
+  if (!text && anhaenge.length === 0) return;
+  if (laeuft) return;
 
   const chat = aktiverChat();
-  const verlauf = chat.nachrichten
-    .filter(m => m.rolle === 'user' || m.rolle === 'assistant')
-    .map(m => ({ rolle: m.rolle, inhalt: m.inhalt }));
 
-  chat.nachrichten.push({ rolle: 'user', inhalt: auftrag });
-  if (chat.titel === 'Neuer Chat') {
-    chat.titel = auftrag.slice(0, 60) + (auftrag.length > 60 ? '…' : '');
+  // Erste Nachricht: Titel setzen
+  if (chat.nachrichten.length === 0 && text) {
+    chat.titel = text.slice(0, 50) + (text.length > 50 ? '…' : '');
   }
+
+  // Aktuelle Anhänge an die Nachricht hängen
+  const aktuelleAnhaenge = [...anhaenge];
+  anhaenge = [];
+  renderAnhaenge();
+
+  chat.nachrichten.push({
+    rolle: 'user',
+    inhalt: text || '(Bild)',
+    anhaenge: aktuelleAnhaenge.map(a => ({ name: a.name, medien_typ: a.medien_typ, base64: a.base64 })),
+  });
   speichereChats();
 
-  eingabe.value = '';
-  eingabe.style.height = 'auto';
   aktuellerAgentSchritte = [];
   aktuellerDenktText = '';
-  aufgeklappteSchritte = new Set();
+  eingabe.value = '';
+  eingabe.style.height = 'auto';
   beschaeftigt(true);
-  renderAlles();
+  renderMessages();
+
+  // Verlauf für den Server: alle Nachrichten außer der letzten (die schicken wir als Auftrag)
+  const verlauf = chat.nachrichten.slice(0, -1).map(m => ({
+    rolle: m.rolle === 'user' ? 'user' : 'assistant',
+    inhalt: m.inhalt,
+    anhaenge: (m.anhaenge || []).map(a => ({ name: a.name, medien_typ: a.medien_typ, base64: a.base64 })),
+  }));
 
   try {
-    await invoke(istIOS ? 'remote_auftrag' : 'starte_auftrag', { auftrag, verlauf });
+    const fn = istIOS ? 'remote_auftrag' : 'starte_auftrag';
+    await invoke(fn, { auftrag: text || 'Beschreibe dieses Bild.', verlauf });
   } catch (e) {
-    chat.nachrichten.push({ rolle: 'fehler', inhalt: 'Start fehlgeschlagen: ' + e });
+    chat.nachrichten.push({ rolle: 'fehler', inhalt: String(e) });
     speichereChats();
     beschaeftigt(false);
     renderAlles();
+    zeigeFehlerBanner('Fehler beim Senden: ' + e);
   }
 }
 
-async function stoppen() {
-  try {
-    await invoke('stoppe_auftrag');
-  } catch (e) {
-    console.error('Abbrechen fehlgeschlagen:', e);
+senden.addEventListener('click', () => {
+  if (laeuft) {
+    invoke('stoppe_auftrag').catch(() => {});
+  } else {
+    los();
   }
-}
-
-senden.addEventListener('click', () => laeuft ? stoppen() : los());
+});
 eingabe.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey && !laeuft) { e.preventDefault(); los(); }
 });
@@ -829,6 +1032,18 @@ listen('famulus-ereignis', e => {
   }
 });
 
+// ── Start ────────────────────────────────────────────────────────────────
+
+(async () => {
+  istIOS = await invoke('ist_ios').catch(() => false);
+  ladeChats();
+  initSidebars();
+  await ladeVersion();
+  await ladeZustand();
+  await ladeModelle();
+  await ladeCredits();
+  renderAlles();
+})();
 </script>
 </body>
 </html>

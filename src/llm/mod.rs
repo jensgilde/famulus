@@ -31,6 +31,15 @@ pub struct ToolResult {
     pub fehler: bool,
 }
 
+/// Ein Bild, das zusammen mit einer Nutzer-Nachricht ans Modell geschickt wird.
+#[derive(Debug, Clone)]
+pub struct BildAnhang {
+    /// MIME-Typ: "image/png", "image/jpeg", "image/gif", "image/webp"
+    pub medien_typ: String,
+    /// Base64-kodierte Bilddaten (ohne data:...-Präfix)
+    pub base64: String,
+}
+
 /// Eine Station im Gesprächsverlauf.
 ///
 /// Bewusst ein Aufzählungstyp statt `{ role, content }`: Ein Modell, das
@@ -39,8 +48,14 @@ pub struct ToolResult {
 /// Ergebnis - und damit genau das, woran sich das Modell orientiert.
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// Was Jens gesagt hat.
+    /// Was Jens gesagt hat (reiner Text, keine Anhänge).
     User(String),
+    /// Was Jens gesagt hat, mit Bildern. Die Bilder werden als Vision-Content-
+    /// Blöcke direkt ans Modell geschickt, sodass es sie "sehen" kann.
+    UserMitBild {
+        text: String,
+        bilder: Vec<BildAnhang>,
+    },
     /// Was das Modell geantwortet hat: Text, Werkzeug-Aufrufe, oder beides.
     Assistant {
         text: String,

@@ -5,7 +5,7 @@ mod remote;
 
 use famulus_core::agent::Agent;
 use famulus_core::config::Config;
-use famulus_core::llm::{self, Message};
+use famulus_core::llm::{self, BildAnhang, Message};
 use famulus_core::ui::{AgentEvent, Ui};
 use std::sync::{Arc, LazyLock, Mutex};
 use tauri::{AppHandle, Emitter, State};
@@ -27,10 +27,22 @@ impl Ui for TauriUi {
     }
 }
 
+// ── Datei-Upload: Von Frontend kommende Anhänge ──────────────────────────
+
+#[derive(serde::Deserialize)]
+struct UploadAnhang {
+    name: String,
+    medien_typ: String,
+    base64: String,
+}
+
 #[derive(serde::Deserialize)]
 struct VerlaufEintrag {
     rolle: String,
     inhalt: String,
+    /// Optionale Anhänge, die das Frontend mitschickt (Bilder, Dateien).
+    #[serde(default)]
+    anhaenge: Vec<UploadAnhang>,
 }
 
 fn verlauf_zu_nachrichten(verlauf: Vec<VerlaufEintrag>) -> Vec<Message> {
@@ -38,7 +50,21 @@ fn verlauf_zu_nachrichten(verlauf: Vec<VerlaufEintrag>) -> Vec<Message> {
         .into_iter()
         .map(|e| {
             if e.rolle == "user" {
-                Message::User(e.inhalt)
+                if e.anhaenge.is_empty() {
+                    Message::User(e.inhalt)
+                } else {
+                    let bilder: Vec<BildAnhang> = e.anhaenge
+                        .into_iter()
+                        .map(|a| BildAnhang {
+                            medien_typ: a.medien_typ,
+                            base64: a.base64,
+                        })
+                        .collect();
+                    Message::UserMitBild {
+                        text: e.inhalt,
+                        bilder,
+                    }
+                }
             } else {
                 Message::Assistant {
                     text: e.inhalt,
@@ -48,6 +74,8 @@ fn verlauf_zu_nachrichten(verlauf: Vec<VerlaufEintrag>) -> Vec<Message> {
         })
         .collect()
 }
+
+// ── Tauri Commands ───────────────────────────────────────────────────────
 
 #[tauri::command]
 fn starte_auftrag(
@@ -174,18 +202,18 @@ async fn credits() -> Result<String, String> {
                 let total = body["data"]["total_credits"].as_f64().unwrap_or(0.0);
                 let verbraucht = body["data"]["total_usage"].as_f64().unwrap_or(0.0);
                 let rest = total - verbraucht;
-                rest.floor().to_string()
+                (rest.floor() as i64).to_string()
             }
-            _ => unreachable!(),
+            _ => "?".to_string(),
         }
     ))
 }
 
 #[tauri::command]
-async fn modelle_liste(_provider: String) -> Result<serde_json::Value, String> {
+async fn modelle_liste(provider: String) -> Result<serde_json::Value, String> {
     let config = Config::load().map_err(|e| format!("{e:#}"))?;
 
-    let (url, key_var) = match config.provider.as_str() {
+    let (url, key_var) = match provider.as_str() {
         "hyper" => (
             format!(
                 "{}/v1/models",
@@ -207,54 +235,58 @@ async fn modelle_liste(_provider: String) -> Result<serde_json::Value, String> {
                 .clone()
                 .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string()),
         ),
-        other => return Err(format!("Unbekannter Provider '{other}'.")),
+        _ => return Ok(serde_json::json!([])),
     };
 
     let key = std::env::var(&key_var).map_err(|e| format!("{key_var} nicht gesetzt: {e}"))?;
+
     let body: serde_json::Value = CLIENT
         .get(&url)
         .bearer_auth(&key)
         .send()
         .await
-        .map_err(|e| format!("Modell-Anfrage fehlgeschlagen: {e}"))?
+        .map_err(|e| format!("Modell-Abfrage fehlgeschlagen: {e}"))?
         .json()
         .await
         .map_err(|e| format!("Modell-Antwort kein JSON: {e}"))?;
 
-    let data = body.get("data").cloned().unwrap_or(body);
-    Ok(data)
+    let raw = match provider.as_str() {
+        "hyper" => body["data"].clone(),
+        "openrouter" => body["data"].clone(),
+        _ => serde_json::json!([]),
+    };
+
+    Ok(raw)
 }
 
 #[tauri::command]
-async fn setze_modell(
-    provider: String,
-    model: String,
-    app: AppHandle,
-) -> Result<String, String> {
-    let pfad = dirs::home_dir()
+async fn setze_modell(provider: String, model: String) -> Result<String, String> {
+    let config_path = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".famulus")
         .join("famulus.toml");
 
-    let mut config: toml::Value = std::fs::read_to_string(&pfad)
-        .map_err(|e| format!("famulus.toml nicht lesbar: {e}"))?
+    let mut config: toml::Value = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("famulus.toml lesen fehlgeschlagen: {e}"))?
         .parse()
         .map_err(|e| format!("famulus.toml kein gültiges TOML: {e}"))?;
 
-    config["provider"] = toml::Value::String(provider.clone());
-    config["model"] = toml::Value::String(model.clone());
+    if let Some(table) = config.as_table_mut() {
+        table.insert("model".to_string(), toml::Value::String(model.clone()));
+    }
 
-    std::fs::write(&pfad, toml::to_string(&config).map_err(|e| format!("toml schreiben fehlgeschlagen: {e}"))?).map_err(|e| format!("Datei schreiben fehlgeschlagen: {e}"))?;
+    std::fs::write(&config_path, toml::to_string_pretty(&config).unwrap())
+        .map_err(|e| format!("famulus.toml schreiben fehlgeschlagen: {e}"))?;
 
-    let _ = app.emit(
-        "famulus-modell-gewechselt",
-        serde_json::json!({ "provider": provider, "model": model }),
-    );
-
-    Ok(format!("{provider} · {model}"))
+    // Das Frontend soll sofort sehen, was jetzt gilt.
+    let config = Config::load().map_err(|e| format!("{e:#}"))?;
+    Ok(format!(
+        "{} · {} · max. {} Schritte",
+        config.provider,
+        config.model.unwrap_or_else(|| "Standardmodell".to_string()),
+        config.max_turns
+    ))
 }
-
-// ── Remote: iPad → Mac über Tailscale ─────────────────────────────────
 
 #[tauri::command]
 async fn remote_auftrag(
@@ -267,16 +299,17 @@ async fn remote_auftrag(
         alt.abort();
     }
 
-    let server_ip = remote::mac_tailscale_ip().to_string();
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
-    let app_clone = app.clone();
 
-    // Events vom WebSocket ins Frontend weiterleiten
-    let _event_handle = tauri::async_runtime::spawn(async move {
+    // Leite eingehende Events ans Frontend weiter
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             let _ = app_clone.emit("famulus-ereignis", event);
         }
     });
+
+    let server_ip = remote::mac_tailscale_ip().to_string();
 
     let verlauf_remote: Vec<remote::RemoteVerlaufEintrag> = verlauf
         .into_iter()

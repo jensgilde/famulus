@@ -5,7 +5,8 @@
 //! Adresse, Key und Standardmodell, nicht im Code darunter.
 
 use super::{
-    http_client, require_api_key, LlmAntwort, LlmProvider, Message, ToolCall, ToolDefinition,
+    http_client, require_api_key, LlmAntwort, LlmProvider, Message, ToolCall,
+    ToolDefinition,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -50,6 +51,24 @@ fn nachrichten_bauen(messages: &[Message]) -> Vec<Value> {
                 "role": "user",
                 "content": [{ "type": "text", "text": text }],
             }),
+            Message::UserMitBild { text, bilder } => {
+                let mut bloecke: Vec<Value> = Vec::new();
+                // Text kommt zuerst, dann die Bilder
+                if !text.trim().is_empty() {
+                    bloecke.push(json!({ "type": "text", "text": text }));
+                }
+                for bild in bilder {
+                    bloecke.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": bild.medien_typ,
+                            "data": bild.base64,
+                        },
+                    }));
+                }
+                json!({ "role": "user", "content": bloecke })
+            }
             Message::Assistant { text, tool_calls } => {
                 let mut bloecke = Vec::new();
                 // Leere Textblöcke lehnt die API ab - nur anhängen, wenn

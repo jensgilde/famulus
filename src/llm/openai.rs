@@ -11,7 +11,8 @@
 //! Objekt, und jedes Ergebnis ist eine eigene Nachricht mit `role: "tool"`.
 
 use super::{
-    http_client, require_api_key, LlmAntwort, LlmProvider, Message, ToolCall, ToolDefinition,
+    http_client, require_api_key, LlmAntwort, LlmProvider, Message, ToolCall,
+    ToolDefinition,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -64,6 +65,22 @@ fn nachrichten_bauen(system: Option<&str>, messages: &[Message]) -> Vec<Value> {
     for m in messages {
         match m {
             Message::User(text) => raus.push(json!({ "role": "user", "content": text })),
+            Message::UserMitBild { text, bilder } => {
+                // OpenAI Vision: content ist ein Array aus Text- und Bild-Blöcken
+                let mut bloecke: Vec<Value> = Vec::new();
+                if !text.trim().is_empty() {
+                    bloecke.push(json!({ "type": "text", "text": text }));
+                }
+                for bild in bilder {
+                    bloecke.push(json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", bild.medien_typ, bild.base64),
+                        },
+                    }));
+                }
+                raus.push(json!({ "role": "user", "content": bloecke }));
+            }
             Message::Assistant { text, tool_calls } => {
                 let mut nachricht = json!({ "role": "assistant" });
                 // `content` muss vorhanden sein, darf aber null sein, wenn
