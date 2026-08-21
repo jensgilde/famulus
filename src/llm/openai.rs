@@ -51,6 +51,26 @@ impl OpenAiProvider {
             client: http_client(timeout)?,
         })
     }
+
+    /// Konstruktor ohne API-Key – für lokale Server wie Ollama, die keinen
+    /// Key brauchen.
+    pub fn neu_ohne_key(
+        label: &'static str,
+        model: String,
+        base_url: String,
+        max_tokens: u32,
+        timeout: Duration,
+    ) -> Result<Self> {
+        Ok(Self {
+            api_key: String::new(),
+            model,
+            endpoint: format!("{base_url}/v1/chat/completions"),
+            label,
+            kopfzeilen: Vec::new(),
+            max_tokens,
+            client: http_client(timeout)?,
+        })
+    }
 }
 
 /// Übersetzt den Verlauf ins OpenAI-Format.
@@ -159,7 +179,12 @@ impl LlmProvider for OpenAiProvider {
             body["tools"] = json!(openai_tools);
         }
 
-        let mut anfrage = self.client.post(&self.endpoint).bearer_auth(&self.api_key);
+        let mut anfrage = self.client.post(&self.endpoint);
+        // Nur Authentifizierung anhängen, wenn ein Key gesetzt ist (Ollama
+        // braucht keinen).
+        if !self.api_key.is_empty() {
+            anfrage = anfrage.bearer_auth(&self.api_key);
+        }
         for (name, wert) in &self.kopfzeilen {
             anfrage = anfrage.header(*name, *wert);
         }

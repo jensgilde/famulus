@@ -1,8 +1,8 @@
 // WebSocket-Fernbedienung: iPad steuert den Mac über Tailscale.
 //
 // Architektur:
-//   Mac (100.70.211.30)  →  WebSocket-Server auf Port 9876
-//   iPad                  →  WebSocket-Client, schickt Aufträge/Anfragen zum Mac
+//   Mac (MagicDNS: macmini.tail29c723.ts.net)  →  WebSocket-Server auf Port 9876
+//   iPad                                        →  WebSocket-Client, schickt Aufträge/Anfragen zum Mac
 //
 // Events fließen vom Mac zurück zum iPad, das sie als Tauri-Events
 // ins Frontend durchreicht. Die UI bleibt auf beiden Geräten identisch.
@@ -253,6 +253,7 @@ async fn credits_ermitteln() -> Result<String, String> {
                 .clone()
                 .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string()),
         ),
+        "ollama" => return Ok("lokal".to_string()),
         other => return Err(format!("Unbekannter Provider '{other}'.")),
     };
 
@@ -298,6 +299,25 @@ async fn modelle_ermitteln(provider: &str) -> Result<serde_json::Value, String> 
             "https://openrouter.ai/api/v1/models".to_string(),
             config.api_key_env.clone().unwrap_or_else(|| "OPENROUTER_API_KEY".to_string()),
         ),
+        "ollama" => {
+            let client = reqwest::Client::new();
+            let body: serde_json::Value = client
+                .get("http://localhost:11434/api/tags")
+                .send()
+                .await
+                .map_err(|e| format!("Ollama-Modell-Abfrage fehlgeschlagen: {e}"))?
+                .json()
+                .await
+                .map_err(|e| format!("Ollama-Modell-Antwort kein JSON: {e}"))?;
+            let models = body["models"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| serde_json::json!({"id": m["name"], "objekt": "model"}))
+                .collect();
+            return Ok(serde_json::Value::Array(models));
+        },
         other => return Err(format!("Unbekannter Provider '{other}'.")),
     };
 
@@ -312,6 +332,24 @@ async fn modelle_ermitteln(provider: &str) -> Result<serde_json::Value, String> 
         .json()
         .await
         .map_err(|e| format!("Modell-Antwort kein JSON: {e}"))?;
+
+    if provider == "openrouter" {
+        // Famulus schickt bei jedem Auftrag Werkzeug-Definitionen mit - ein
+        // Modell ohne "tools" in supported_parameters kann damit nichts
+        // anfangen und die Anfrage schlaegt fehl.
+        let gefiltert: Vec<serde_json::Value> = body["data"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| {
+                m["supported_parameters"]
+                    .as_array()
+                    .is_some_and(|p| p.iter().any(|v| v.as_str() == Some("tools")))
+            })
+            .collect();
+        return Ok(serde_json::Value::Array(gefiltert));
+    }
 
     Ok(body.get("data").cloned().unwrap_or(body))
 }
@@ -486,7 +524,7 @@ pub async fn client_credits(server_ip: &str) -> Result<String, String> {
     Err("Keine Antwort vom Server".to_string())
 }
 
-/// Die statische Tailscale-IP des Macs.
+/// Löst die Tailscale-Adresse des Macs über MagicDNS auf.
 
 /// Fragt die Modellliste vom Mac ab.
 pub async fn client_modelle(server_ip: &str, provider: &str) -> Result<serde_json::Value, String> {
@@ -581,7 +619,17 @@ pub async fn client_version(server_ip: &str) -> Result<String, String> {
     Err("Keine Antwort vom Server".to_string())
 }
 
-/// Die statische Tailscale-IP des Macs.
-pub fn mac_tailscale_ip() -> &'static str {
-    "100.70.211.30"
+/// Löst die Tailscale-Adresse des Macs über MagicDNS auf.
+pub async fn mac_tailscale_ip() -> String {
+    // MagicDNS-Hostname – stabiler als die IP, die sich ändern kann.
+    // Wird von Tailscale auf jedem Gerät im Netzwerk aufgelöst.
+    const HOSTNAME: &str = "macmini.tail29c723.ts.net";
+
+    // Erst DNS-Auflösung, Fallback auf hartcodierte IP.
+    if let Ok(addr) = tokio::net::lookup_host(format!("{HOSTNAME}:{SERVER_PORT}")).await {
+        for a in addr {
+            return a.ip().to_string();
+        }
+    }
+    "100.70.211.30".to_string()
 }

@@ -1,6 +1,6 @@
 {
   "productName": "Famulus",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "one.gilde.famulus",
   "build": {
     "frontendDist": "../ui"
@@ -24,6 +24,16 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "signingIdentity": "Apple Development: jens.gilde@gmail.com (XR97C4QPKT)"
+    }
   }
 }

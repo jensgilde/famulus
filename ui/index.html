@@ -416,8 +416,8 @@ function aktiverChat() {
 function ladeSidebarZustand() {
   try {
     const z = JSON.parse(localStorage.getItem(LS_SIDEBAR) || '{}');
-    return { left: z.left !== undefined ? z.left : true, right: z.right !== undefined ? z.right : true };
-  } catch { return { left: true, right: true }; }
+    return { left: z.left !== undefined ? z.left : false, right: z.right !== undefined ? z.right : false };
+  } catch { return { left: false, right: false }; }
 }
 
 function speichereSidebarZustand(z) {
@@ -825,6 +825,7 @@ function renderModelle() {
         const fn = istIOS ? 'remote_setze_modell' : 'setze_modell';
         const z = await invoke(fn, { provider: aktuelleProvider, model: m.id });
         zustandEl.textContent = z;
+        ladeCredits();
       } catch (e) {
         zeigeFehlerBanner('Modell wechseln fehlgeschlagen: ' + e);
       }
@@ -850,7 +851,7 @@ document.addEventListener('click', e => {
 
 // Provider-Optionen
 const providerDropdown = document.getElementById('providerDropdown');
-['hyper', 'openrouter'].forEach(p => {
+['hyper', 'openrouter', 'ollama'].forEach(p => {
   const div = document.createElement('div');
   div.className = 'model-select-option' + (p === aktuelleProvider ? ' active' : '');
   div.textContent = p;
@@ -884,6 +885,15 @@ async function ladeZustand() {
     const fn = istIOS ? 'remote_zustand' : 'zustand';
     const z = await invoke(fn);
     zustandEl.textContent = z;
+    const teile = z.split(' · ');
+    if (teile.length >= 2) {
+      aktuelleProvider = teile[0];
+      aktuellesModell = teile[1];
+      document.getElementById('providerTrigger').textContent = aktuelleProvider;
+      document.querySelectorAll('#providerDropdown .model-select-option').forEach(o => {
+        o.classList.toggle('active', o.textContent === aktuelleProvider);
+      });
+    }
   } catch (e) {
     zustandEl.textContent = 'Offline';
   }

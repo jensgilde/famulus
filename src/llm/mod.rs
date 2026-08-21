@@ -184,8 +184,21 @@ pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn 
             timeout,
         )?)),
 
+        // Ollama: lokaler Server, spricht das OpenAI-Protokoll auf
+        // localhost:11434. Kein API-Key nötig, alle Modelle sind lokal
+        // verfügbar. Deepseek-R1 und andere Reasoning-Modelle schicken
+        // ihren Gedankengang in `reasoning_content` mit – das wird
+        // im Text ignoriert, aber die Antwort kommt trotzdem an.
+        "ollama" => Ok(Box::new(openai::OpenAiProvider::neu_ohne_key(
+            "ollama",
+            modell.unwrap_or_else(|| "deepseek-r1:14b".to_string()),
+            basis(basis_url, "http://localhost:11434"),
+            max_tokens,
+            timeout,
+        )?)),
+
         other => anyhow::bail!(
-            "Unbekannter Provider '{other}' in famulus.toml. Erlaubt: 'hyper', 'openrouter'."
+            "Unbekannter Provider '{other}' in famulus.toml. Erlaubt: 'hyper', 'openrouter', 'ollama'."
         ),
     }
 }

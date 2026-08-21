@@ -213,6 +213,26 @@ async fn credits() -> Result<String, String> {
 async fn modelle_liste(provider: String) -> Result<serde_json::Value, String> {
     let config = Config::load().map_err(|e| format!("{e:#}"))?;
 
+    // Ollama: lokale Modelle von /api/tags (kein API-Key nötig).
+    if provider == "ollama" {
+        let body: serde_json::Value = CLIENT
+            .get("http://localhost:11434/api/tags")
+            .send()
+            .await
+            .map_err(|e| format!("Ollama-Modell-Abfrage fehlgeschlagen: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("Ollama-Modell-Antwort kein JSON: {e}"))?;
+        let models: Vec<serde_json::Value> = body["models"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| serde_json::json!({"id": m["name"], "objekt": "model"}))
+            .collect();
+        return Ok(serde_json::Value::Array(models));
+    }
+
     let (url, key_var) = match provider.as_str() {
         "hyper" => (
             format!(
@@ -252,7 +272,23 @@ async fn modelle_liste(provider: String) -> Result<serde_json::Value, String> {
 
     let raw = match provider.as_str() {
         "hyper" => body["data"].clone(),
-        "openrouter" => body["data"].clone(),
+        // Famulus schickt bei jedem Auftrag Werkzeug-Definitionen mit - ein
+        // Modell ohne "tools" in supported_parameters kann damit nichts
+        // anfangen und die Anfrage schlaegt fehl. Solche Modelle werden erst
+        // gar nicht zur Auswahl angeboten.
+        "openrouter" => serde_json::Value::Array(
+            body["data"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| {
+                    m["supported_parameters"]
+                        .as_array()
+                        .is_some_and(|p| p.iter().any(|v| v.as_str() == Some("tools")))
+                })
+                .collect(),
+        ),
         _ => serde_json::json!([]),
     };
 
@@ -272,6 +308,7 @@ async fn setze_modell(provider: String, model: String) -> Result<String, String>
         .map_err(|e| format!("famulus.toml kein gültiges TOML: {e}"))?;
 
     if let Some(table) = config.as_table_mut() {
+        table.insert("provider".to_string(), toml::Value::String(provider.clone()));
         table.insert("model".to_string(), toml::Value::String(model.clone()));
     }
 
@@ -309,7 +346,7 @@ async fn remote_auftrag(
         }
     });
 
-    let server_ip = remote::mac_tailscale_ip().to_string();
+    let server_ip = remote::mac_tailscale_ip().await;
 
     let verlauf_remote: Vec<remote::RemoteVerlaufEintrag> = verlauf
         .into_iter()
@@ -341,23 +378,23 @@ async fn remote_auftrag(
 /// Remote-Version von zustand: fragt den Mac über WebSocket.
 #[tauri::command]
 async fn remote_zustand() -> Result<String, String> {
-    remote::client_zustand(remote::mac_tailscale_ip()).await
+    remote::client_zustand(&remote::mac_tailscale_ip().await).await
 }
 
 /// Remote-Version von credits: fragt den Mac über WebSocket.
 #[tauri::command]
 async fn remote_credits() -> Result<String, String> {
-    remote::client_credits(remote::mac_tailscale_ip()).await
+    remote::client_credits(&remote::mac_tailscale_ip().await).await
 }
 
 #[tauri::command]
 async fn remote_modelle_liste(provider: String) -> Result<serde_json::Value, String> {
-    remote::client_modelle(remote::mac_tailscale_ip(), &provider).await
+    remote::client_modelle(&remote::mac_tailscale_ip().await, &provider).await
 }
 
 #[tauri::command]
 async fn remote_setze_modell(provider: String, model: String) -> Result<String, String> {
-    remote::client_setze_modell(remote::mac_tailscale_ip(), &provider, &model).await
+    remote::client_setze_modell(&remote::mac_tailscale_ip().await, &provider, &model).await
 }
 
 #[tauri::command]
@@ -367,7 +404,7 @@ fn version() -> String {
 
 #[tauri::command]
 async fn remote_version() -> Result<String, String> {
-    remote::client_version(remote::mac_tailscale_ip()).await
+    remote::client_version(&remote::mac_tailscale_ip().await).await
 }
 
 #[tauri::command]

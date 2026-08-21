@@ -5,6 +5,21 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] – 2026-08-21
+
+### Hinzugefügt
+- **Ollama-Provider**: Lokale Modelle (deepseek-r1:14b) als dritter Provider in der Dropdown-Liste.
+  - Provider-Auswahl jetzt: Hyper · OpenRouter · Ollama
+  - Ollama spricht das OpenAI-Protokoll auf `localhost:11434`, kein API-Key nötig.
+  - Modell-Liste wird direkt von Ollama `/api/tags` geladen.
+  - Credits-Anzeige zeigt "lokal" für Ollama (kostenlos).
+  - `OpenAiProvider::neu_ohne_key()` für Provider ohne Authentifizierung.
+
+### Geändert
+- `OpenAiProvider` sendet nur dann `Bearer`-Auth-Header, wenn ein API-Key gesetzt ist.
+- `build_provider()` akzeptiert jetzt "ollama" als Provider.
+- `credits()` und `modelle_liste()` (Mac + Remote) erkennen Ollama als Sonderfall.
+
 ## [0.2.0] – 2025-07-15
 
 ### Hinzugefügt
