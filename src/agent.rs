@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::llm::{LlmProvider, Message, ToolResult};
 use crate::memory::{Gedaechtnis, ART_FAKT, ART_LEKTION, ART_PRAEFERENZ};
+use crate::presets::PresetsConfig;
 use crate::permissions::PermissionManager;
 use crate::tools::{all_tools, Tool};
 use crate::ui::{AgentEvent, Ui};
@@ -73,6 +74,16 @@ impl Agent {
     fn systemvorspann(&self, auftrag: &str) -> Option<String> {
         let mut teile = Vec::new();
 
+        // 1. Aktives Preset (vom Nutzer gewähltes System-Prompt) – kommt
+        //    als erstes, damit es die Rolle definiert, bevor Gedächtnis und
+        //    Vault-Anweisungen folgen.
+        if let Ok(presets) = PresetsConfig::load() {
+            if let Some(prompt) = presets.aktiver_prompt() {
+                teile.push(prompt.to_string());
+            }
+        }
+
+        // 2. Gedächtnis: was Famulus aus früheren Aufträgen über Jens weiß.
         if let Some(g) = &self.gedaechtnis {
             if let Ok(erinnerungen) = g.relevante(auftrag, self.max_erinnerungen) {
                 if !erinnerungen.is_empty() {
@@ -91,6 +102,7 @@ impl Agent {
             }
         }
 
+        // 3. Vault-Anweisungen (nur wenn ein Vault-Pfad konfiguriert ist).
         if self.hat_vault {
             teile.push(
                 "Du hast einen Obsidian-Vault als Langzeitgedächtnis über Jens. \

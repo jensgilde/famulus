@@ -98,6 +98,40 @@
     color: var(--text-muted); text-transform: uppercase;
     display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
   }
+
+  /* ---- Presets in rechter Sidebar ---- */
+  .presets-area {
+    padding: 8px; display: flex; flex-direction: column; gap: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .presets-area .model-select { width: 100%; }
+  .presets-area .model-select-trigger {
+    width: 100%; max-width: 100%; border-radius: 4px;
+  }
+  .presets-area .model-select-dropdown {
+    left: 0; right: auto; min-width: 100%;
+  }
+  .preset-textarea {
+    width: 100%; min-height: 120px; max-height: 200px;
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text-primary); font-family: inherit;
+    font-size: 11px; line-height: 1.5; padding: 8px; resize: vertical;
+    transition: border-color .2s;
+  }
+  .preset-textarea:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .preset-actions {
+    display: flex; gap: 4px; justify-content: flex-end;
+  }
+  .preset-btn {
+    background: none; border: 1px solid var(--border); color: var(--text-muted);
+    width: 24px; height: 24px; border-radius: 4px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 11px;
+    transition: all .15s;
+  }
+  .preset-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .preset-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
   .new-chat-btn {
     background: none; border: 1px solid var(--border); color: var(--text-muted);
     width: 22px; height: 22px; border-radius: 4px; cursor: pointer;
@@ -336,6 +370,19 @@
       </div>
     </div>
     <div class="sidebar right-sidebar collapsed" id="rightSidebar">
+      <div class="sidebar-header">Presets</div>
+      <div class="presets-area">
+        <div class="model-select" id="presetSelect">
+          <div class="model-select-trigger" id="presetTrigger">Standard</div>
+          <div class="model-select-dropdown" id="presetDropdown"></div>
+        </div>
+        <textarea class="preset-textarea" id="presetTextarea" placeholder="System-Prompt..."></textarea>
+        <div class="preset-actions">
+          <button class="preset-btn" id="presetSaveBtn" title="Speichern">✓</button>
+          <button class="preset-btn" id="presetDeleteBtn" title="Löschen">✕</button>
+        </div>
+      </div>
+      <div class="sidebar-header">Archiv</div>
       <div class="sidebar-header">Archiv</div>
       <div class="conversation-list" id="archivedList"></div>
     </div>
@@ -378,6 +425,80 @@ const leftSidebar = document.getElementById('leftSidebar');
 const rightSidebar = document.getElementById('rightSidebar');
 const leftSidebarToggle = document.getElementById('leftSidebarToggle');
 const rightSidebarToggle = document.getElementById('rightSidebarToggle');
+
+// ── Presets ────────────────────────────────────────────────────────────
+const presetSelect = document.getElementById("presetSelect");
+const presetTrigger = document.getElementById("presetTrigger");
+const presetDropdown = document.getElementById("presetDropdown");
+const presetTextarea = document.getElementById("presetTextarea");
+const presetSaveBtn = document.getElementById("presetSaveBtn");
+const presetDeleteBtn = document.getElementById("presetDeleteBtn");
+let presetsData = null;
+let aktivesPreset = null;
+
+function presetCommand(fn) { return istIOS ? "remote_"+fn : fn; }
+
+async function ladePresets() {
+  try {
+    presetsData = await invoke(presetCommand("presets_liste"));
+    aktivesPreset = presetsData.active;
+    renderPresetUI();
+  } catch(e) { console.error("Presets laden:", e); }
+}
+
+function renderPresetUI() {
+  if (!presetsData) return;
+  presetDropdown.innerHTML = "";
+  for (const p of presetsData.presets) {
+    const div = document.createElement("div");
+    div.className = "model-select-option" + (p.name === aktivesPreset ? " active" : "");
+    div.textContent = p.name;
+    div.addEventListener("click", () => presetsAktivieren(p.name));
+    presetDropdown.appendChild(div);
+  }
+  presetTrigger.textContent = aktivesPreset || "Standard";
+  
+  const aktiv = presetsData.presets.find(p => p.name === aktivesPreset);
+  if (aktiv) presetTextarea.value = aktiv.prompt;
+}
+
+async function presetsAktivieren(name) {
+  try {
+    presetsData = await invoke(presetCommand("presets_aktivieren"), { name });
+    aktivesPreset = presetsData.active;
+    renderPresetUI();
+    presetSelect.classList.remove("open");
+  } catch(e) { console.error("Preset aktivieren:", e); }
+}
+
+async function presetsSpeichern() {
+  const name = aktivesPreset || "Standard";
+  const prompt = presetTextarea.value.trim();
+  if (!prompt) return;
+  try {
+    presetsData = await invoke(presetCommand("presets_speichern"), { name, prompt });
+    renderPresetUI();
+  } catch(e) { console.error("Preset speichern:", e); }
+}
+
+async function presetsLoeschen() {
+  const name = aktivesPreset;
+  if (!name || presetsData.presets.length <= 1) return;
+  if (!confirm("Preset „" + name + " wirklich löschen?")) return;
+  try {
+    presetsData = await invoke(presetCommand("presets_loeschen"), { name });
+    aktivesPreset = presetsData.active;
+    renderPresetUI();
+  } catch(e) { console.error("Preset löschen:", e); }
+}
+
+presetTrigger.addEventListener("click", () => presetSelect.classList.toggle("open"));
+presetSaveBtn.addEventListener("click", presetsSpeichern);
+presetDeleteBtn.addEventListener("click", presetsLoeschen);
+document.addEventListener("click", e => {
+  if (!presetSelect.contains(e.target)) presetSelect.classList.remove("open");
+});
+
 
 // ── Persistenz ───────────────────────────────────────────────────────────
 const LS_KEY = 'famulus-chats';
@@ -1051,6 +1172,7 @@ listen('famulus-ereignis', e => {
   await ladeVersion();
   await ladeZustand();
   await ladeModelle();
+  await ladePresets();
   await ladeCredits();
   renderAlles();
   // Credits laufen auch außerhalb dieses Fensters weg (CLI, anderes Gerät) -

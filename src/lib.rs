@@ -14,6 +14,8 @@ pub mod agent;
 pub mod config;
 pub mod llm;
 pub mod memory;
+/// System-Prompt-Presets mit Dropdown-Umschaltung
+pub mod presets;
 pub mod permissions;
 pub mod tools;
 pub mod ui;

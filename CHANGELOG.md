@@ -5,6 +5,28 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] – 2026-08-21
+
+### Hinzugefügt
+- **System-Prompt-Editor mit Presets**: In der rechten Sidebar kann jetzt zwischen verschiedenen
+  System-Prompts gewechselt werden. Vier Presets sind vorinstalliert:
+  - **Standard**: Famulus als hilfsbereiter Assistent
+  - **Code-Reviewer**: Senior-Entwickler für Rust, TypeScript, Python, Shell
+  - **Texter**: Professioneller Lektor für deutsche Texte
+  - **Kreativ**: Ideengeber und Brainstorming-Partner
+- Presets werden in `~/.famulus/presets.toml` gespeichert und können bearbeitet, gelöscht und
+  neu angelegt werden.
+- Der aktive System-Prompt wird vom Agenten in den System-Vorspann übernommen – vor den
+  Gedächtnis- und Vault-Anweisungen.
+- Remote-Unterstützung für iPad: Presets werden über WebSocket synchronisiert.
+
+### Geändert
+- `agent.rs`: `systemvorspann()` lädt jetzt den aktiven Prompt aus den Presets.
+- `gui/src/lib.rs`: 4 neue Tauri-Commands (`presets_liste`, `presets_aktivieren`,
+  `presets_speichern`, `presets_loeschen`) + 4 Remote-Commands.
+- `gui/src/remote.rs`: Neue Request/Response-Varianten für Presets.
+- `ui/index.html`: Rechte Sidebar enthält jetzt Presets-Bereich mit Dropdown + Textarea + Buttons.
+
 ## [0.3.1] – 2026-08-21
 
 ### Behoben

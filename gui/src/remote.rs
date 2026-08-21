@@ -8,6 +8,7 @@
 // ins Frontend durchreicht. Die UI bleibt auf beiden Geräten identisch.
 
 use famulus_core::ui::AgentEvent;
+use famulus_core::presets::PresetsConfig;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -36,6 +37,14 @@ enum RemoteRequest {
     SetzeModell { provider: String, model: String },
     #[serde(rename = "version")]
     Version,
+    #[serde(rename = "presets_liste")]
+    PresetsListe,
+    #[serde(rename = "presets_aktivieren")]
+    PresetsAktivieren { name: String },
+    #[serde(rename = "presets_speichern")]
+    PresetsSpeichern { name: String, prompt: String },
+    #[serde(rename = "presets_loeschen")]
+    PresetsLoeschen { name: String },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -57,6 +66,8 @@ enum RemoteResponse {
     Modelle { modelle: serde_json::Value },
     #[serde(rename = "version")]
     Version { version: String },
+    #[serde(rename = "presets")]
+    Presets { presets: serde_json::Value },
     #[serde(rename = "error")]
     Error { fehler: String },
 }
@@ -167,6 +178,46 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                 RemoteRequest::Version => {
                     let v = env!("CARGO_PKG_VERSION").to_string();
                     let _ = send_response(&tx, &RemoteResponse::Version { version: v }).await;
+                }
+                RemoteRequest::PresetsListe => {
+                    match presets_ermitteln() {
+                        Ok(p) => {
+                            let _ = send_response(&tx, &RemoteResponse::Presets { presets: p }).await;
+                        }
+                        Err(e) => {
+                            let _ = send_error(&tx, &e).await;
+                        }
+                    }
+                }
+                RemoteRequest::PresetsAktivieren { name } => {
+                    match presets_aktivieren_server(&name) {
+                        Ok(p) => {
+                            let _ = send_response(&tx, &RemoteResponse::Presets { presets: p }).await;
+                        }
+                        Err(e) => {
+                            let _ = send_error(&tx, &e).await;
+                        }
+                    }
+                }
+                RemoteRequest::PresetsSpeichern { name, prompt } => {
+                    match presets_speichern_server(&name, &prompt) {
+                        Ok(p) => {
+                            let _ = send_response(&tx, &RemoteResponse::Presets { presets: p }).await;
+                        }
+                        Err(e) => {
+                            let _ = send_error(&tx, &e).await;
+                        }
+                    }
+                }
+                RemoteRequest::PresetsLoeschen { name } => {
+                    match presets_loeschen_server(&name) {
+                        Ok(p) => {
+                            let _ = send_response(&tx, &RemoteResponse::Presets { presets: p }).await;
+                        }
+                        Err(e) => {
+                            let _ = send_error(&tx, &e).await;
+                        }
+                    }
                 }
                 RemoteRequest::Auftrag { auftrag, verlauf } => {
                     let verlauf: Vec<Message> = verlauf
@@ -412,6 +463,50 @@ async fn send_error(tx: &Arc<tokio::sync::Mutex<WsTx>>, fehler: &str) {
 // ── iPad: Client ─────────────────────────────────────────────────────────
 
 /// Schickt einen Auftrag zum Mac und leitet Events in den Kanal weiter.
+// ── Presets (Server-seitig) ──────────────────────────────────────────────
+
+fn presets_ermitteln() -> Result<serde_json::Value, String> {
+    let presets = PresetsConfig::load().map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
+}
+
+fn presets_aktivieren_server(name: &str) -> Result<serde_json::Value, String> {
+    let mut presets = PresetsConfig::load().map_err(|e| format!("{e:#}"))?;
+    if !presets.presets.iter().any(|p| p.name == name) {
+        return Err(format!("Preset '{name}' existiert nicht"));
+    }
+    presets.active = Some(name.to_string());
+    presets.save().map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
+}
+
+fn presets_speichern_server(name: &str, prompt: &str) -> Result<serde_json::Value, String> {
+    let mut presets = PresetsConfig::load().map_err(|e| format!("{e:#}"))?;
+    if let Some(existing) = presets.presets.iter_mut().find(|p| p.name == name) {
+        existing.prompt = prompt.to_string();
+    } else {
+        presets.presets.push(famulus_core::presets::Preset {
+            name: name.to_string(),
+            prompt: prompt.to_string(),
+        });
+    }
+    presets.save().map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
+}
+
+fn presets_loeschen_server(name: &str) -> Result<serde_json::Value, String> {
+    let mut presets = PresetsConfig::load().map_err(|e| format!("{e:#}"))?;
+    if presets.presets.len() <= 1 {
+        return Err("Das letzte Preset kann nicht gelöscht werden".to_string());
+    }
+    presets.presets.retain(|p| p.name != name);
+    if presets.active.as_deref() == Some(name) {
+        presets.active = presets.presets.first().map(|p| p.name.clone());
+    }
+    presets.save().map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
+}
+
 pub async fn client_auftrag(
     server_ip: &str,
     auftrag: &str,
@@ -610,6 +705,132 @@ pub async fn client_version(server_ip: &str) -> Result<String, String> {
         if let WsMsg::Text(text) = msg {
             match serde_json::from_str::<RemoteResponse>(&text) {
                 Ok(RemoteResponse::Version { version }) => return Ok(version),
+                Ok(RemoteResponse::Error { fehler }) => return Err(fehler),
+                _ => return Err("Unerwartete Antwort vom Server".to_string()),
+            }
+        }
+    }
+
+    Err("Keine Antwort vom Server".to_string())
+}
+
+// ── Client: Presets ─────────────────────────────────────────────────────
+
+/// Holt die Presets vom Mac.
+pub async fn client_presets_liste(server_ip: &str) -> Result<serde_json::Value, String> {
+    let url = format!("ws://{server_ip}:{SERVER_PORT}");
+
+    let (ws, _) = tokio::time::timeout(VERBINDUNGS_TIMEOUT, tokio_tungstenite::connect_async(&url))
+        .await
+        .map_err(|_| format!("Zeitüberschreitung: Keine Verbindung zu {url}."))?
+        .map_err(|e| format!("Keine Verbindung: {e}"))?;
+
+    let (mut tx, mut rx) = ws.split();
+
+    let request = RemoteRequest::PresetsListe;
+    let json = serde_json::to_string(&request).map_err(|e| format!("JSON-Fehler: {e}"))?;
+    tx.send(WsMsg::Text(json.into()))
+        .await
+        .map_err(|e| format!("Sende-Fehler: {e}"))?;
+
+    if let Some(msg) = rx.next().await {
+        let msg = msg.map_err(|e| format!("Empfangs-Fehler: {e}"))?;
+        if let WsMsg::Text(text) = msg {
+            match serde_json::from_str::<RemoteResponse>(&text) {
+                Ok(RemoteResponse::Presets { presets }) => return Ok(presets),
+                Ok(RemoteResponse::Error { fehler }) => return Err(fehler),
+                _ => return Err("Unerwartete Antwort vom Server".to_string()),
+            }
+        }
+    }
+
+    Err("Keine Antwort vom Server".to_string())
+}
+
+/// Aktiviert ein Preset auf dem Mac.
+pub async fn client_presets_aktivieren(server_ip: &str, name: &str) -> Result<serde_json::Value, String> {
+    let url = format!("ws://{server_ip}:{SERVER_PORT}");
+
+    let (ws, _) = tokio::time::timeout(VERBINDUNGS_TIMEOUT, tokio_tungstenite::connect_async(&url))
+        .await
+        .map_err(|_| format!("Zeitüberschreitung: Keine Verbindung zu {url}."))?
+        .map_err(|e| format!("Keine Verbindung: {e}"))?;
+
+    let (mut tx, mut rx) = ws.split();
+
+    let request = RemoteRequest::PresetsAktivieren { name: name.to_string() };
+    let json = serde_json::to_string(&request).map_err(|e| format!("JSON-Fehler: {e}"))?;
+    tx.send(WsMsg::Text(json.into()))
+        .await
+        .map_err(|e| format!("Sende-Fehler: {e}"))?;
+
+    if let Some(msg) = rx.next().await {
+        let msg = msg.map_err(|e| format!("Empfangs-Fehler: {e}"))?;
+        if let WsMsg::Text(text) = msg {
+            match serde_json::from_str::<RemoteResponse>(&text) {
+                Ok(RemoteResponse::Presets { presets }) => return Ok(presets),
+                Ok(RemoteResponse::Error { fehler }) => return Err(fehler),
+                _ => return Err("Unerwartete Antwort vom Server".to_string()),
+            }
+        }
+    }
+
+    Err("Keine Antwort vom Server".to_string())
+}
+
+/// Speichert ein Preset auf dem Mac.
+pub async fn client_presets_speichern(server_ip: &str, name: &str, prompt: &str) -> Result<serde_json::Value, String> {
+    let url = format!("ws://{server_ip}:{SERVER_PORT}");
+
+    let (ws, _) = tokio::time::timeout(VERBINDUNGS_TIMEOUT, tokio_tungstenite::connect_async(&url))
+        .await
+        .map_err(|_| format!("Zeitüberschreitung: Keine Verbindung zu {url}."))?
+        .map_err(|e| format!("Keine Verbindung: {e}"))?;
+
+    let (mut tx, mut rx) = ws.split();
+
+    let request = RemoteRequest::PresetsSpeichern { name: name.to_string(), prompt: prompt.to_string() };
+    let json = serde_json::to_string(&request).map_err(|e| format!("JSON-Fehler: {e}"))?;
+    tx.send(WsMsg::Text(json.into()))
+        .await
+        .map_err(|e| format!("Sende-Fehler: {e}"))?;
+
+    if let Some(msg) = rx.next().await {
+        let msg = msg.map_err(|e| format!("Empfangs-Fehler: {e}"))?;
+        if let WsMsg::Text(text) = msg {
+            match serde_json::from_str::<RemoteResponse>(&text) {
+                Ok(RemoteResponse::Presets { presets }) => return Ok(presets),
+                Ok(RemoteResponse::Error { fehler }) => return Err(fehler),
+                _ => return Err("Unerwartete Antwort vom Server".to_string()),
+            }
+        }
+    }
+
+    Err("Keine Antwort vom Server".to_string())
+}
+
+/// Löscht ein Preset auf dem Mac.
+pub async fn client_presets_loeschen(server_ip: &str, name: &str) -> Result<serde_json::Value, String> {
+    let url = format!("ws://{server_ip}:{SERVER_PORT}");
+
+    let (ws, _) = tokio::time::timeout(VERBINDUNGS_TIMEOUT, tokio_tungstenite::connect_async(&url))
+        .await
+        .map_err(|_| format!("Zeitüberschreitung: Keine Verbindung zu {url}."))?
+        .map_err(|e| format!("Keine Verbindung: {e}"))?;
+
+    let (mut tx, mut rx) = ws.split();
+
+    let request = RemoteRequest::PresetsLoeschen { name: name.to_string() };
+    let json = serde_json::to_string(&request).map_err(|e| format!("JSON-Fehler: {e}"))?;
+    tx.send(WsMsg::Text(json.into()))
+        .await
+        .map_err(|e| format!("Sende-Fehler: {e}"))?;
+
+    if let Some(msg) = rx.next().await {
+        let msg = msg.map_err(|e| format!("Empfangs-Fehler: {e}"))?;
+        if let WsMsg::Text(text) = msg {
+            match serde_json::from_str::<RemoteResponse>(&text) {
+                Ok(RemoteResponse::Presets { presets }) => return Ok(presets),
                 Ok(RemoteResponse::Error { fehler }) => return Err(fehler),
                 _ => return Err("Unerwartete Antwort vom Server".to_string()),
             }

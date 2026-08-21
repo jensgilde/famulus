@@ -7,6 +7,7 @@ use famulus_core::agent::Agent;
 use famulus_core::config::Config;
 use famulus_core::llm::{self, BildAnhang, Message};
 use famulus_core::ui::{AgentEvent, Ui};
+use famulus_core::presets::PresetsConfig;
 use std::sync::{Arc, LazyLock, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
@@ -397,9 +398,78 @@ async fn remote_setze_modell(provider: String, model: String) -> Result<String, 
     remote::client_setze_modell(&remote::mac_tailscale_ip().await, &provider, &model).await
 }
 
+// ── Presets ───────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn presets_liste() -> Result<serde_json::Value, String> {
+    let presets = PresetsConfig::load().map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn presets_aktivieren(name: String) -> Result<serde_json::Value, String> {
+    let mut presets = PresetsConfig::load().map_err(|e| format!("{e:#}"))?;
+    // Prüf, dass das Preset existiert
+    if !presets.presets.iter().any(|p| p.name == name) {
+        return Err(format!("Preset '{name}' existiert nicht"));
+    }
+    presets.active = Some(name);
+    presets.save().map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn presets_speichern(name: String, prompt: String) -> Result<serde_json::Value, String> {
+    let mut presets = PresetsConfig::load().map_err(|e| format!("{e:#}"))?;
+    if let Some(existing) = presets.presets.iter_mut().find(|p| p.name == name) {
+        existing.prompt = prompt;
+    } else {
+        presets.presets.push(famulus_core::presets::Preset { name, prompt });
+    }
+    presets.save().map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn presets_loeschen(name: String) -> Result<serde_json::Value, String> {
+    let mut presets = PresetsConfig::load().map_err(|e| format!("{e:#}"))?;
+    // Verhindern, dass das letzte Preset gelöscht wird
+    if presets.presets.len() <= 1 {
+        return Err("Das letzte Preset kann nicht gelöscht werden".to_string());
+    }
+    presets.presets.retain(|p| p.name != name);
+    // Falls das aktive Preset gelöscht wurde, auf das erste umschalten
+    if presets.active.as_deref() == Some(&name) {
+        presets.active = presets.presets.first().map(|p| p.name.clone());
+    }
+    presets.save().map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Remote-Presets: fragt den Mac über WebSocket.
+#[tauri::command]
+async fn remote_presets_liste() -> Result<serde_json::Value, String> {
+    remote::client_presets_liste(&remote::mac_tailscale_ip().await).await
+}
+
+#[tauri::command]
+async fn remote_presets_aktivieren(name: String) -> Result<serde_json::Value, String> {
+    remote::client_presets_aktivieren(&remote::mac_tailscale_ip().await, &name).await
+}
+
+#[tauri::command]
+async fn remote_presets_speichern(name: String, prompt: String) -> Result<serde_json::Value, String> {
+    remote::client_presets_speichern(&remote::mac_tailscale_ip().await, &name, &prompt).await
+}
+
+#[tauri::command]
+async fn remote_presets_loeschen(name: String) -> Result<serde_json::Value, String> {
+    remote::client_presets_loeschen(&remote::mac_tailscale_ip().await, &name).await
 }
 
 #[tauri::command]
@@ -438,7 +508,15 @@ pub fn run() {
             remote_credits,
             remote_modelle_liste,
             remote_setze_modell,
+            presets_liste,
+            presets_aktivieren,
+            presets_speichern,
+            presets_loeschen,
             version,
+            remote_presets_liste,
+            remote_presets_aktivieren,
+            remote_presets_speichern,
+            remote_presets_loeschen,
             remote_version,
             ist_ios,
         ])
