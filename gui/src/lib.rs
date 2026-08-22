@@ -33,7 +33,6 @@ impl Ui for TauriUi {
 
 #[derive(serde::Deserialize)]
 struct UploadAnhang {
-    name: String,
     medien_typ: String,
     base64: String,
 }
@@ -79,13 +78,20 @@ fn verlauf_zu_nachrichten(verlauf: Vec<VerlaufEintrag>) -> Vec<Message> {
 
 // ── History-Helfer ──────────────────────────────────────────────────────
 
-fn history_db() -> History {
+// Gibt einen String statt anyhow::Error zurueck, weil das der Fehlertyp ist,
+// den alle history_*-Commands unten per `?` an die GUI durchreichen.
+// Bewusst kein .expect() mehr: das saesse in einem Tauri-Command-Handler,
+// und ein Panic dort beantwortet das zugehoerige JS-Promise nie - das
+// Frontend haengt dann fuer immer in "Lade...", ohne Fehlermeldung, ohne
+// dass der Rest der App merkt, dass etwas schiefging (siehe famulus-gui
+// Absturzserie von v0.5.0/v0.6.0: derselbe Fehlerklasse, andere Stelle).
+fn history_db() -> Result<History, String> {
     let pfad = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("KI Agenten")
         .join("famulus")
         .join("gedaechtnis.db");
-    History::oeffnen(&pfad).expect("History-Datenbank nicht zu öffnen")
+    History::oeffnen(&pfad).map_err(|e| format!("History-Datenbank nicht zu öffnen: {e:#}"))
 }
 
 // ── Tauri Commands ───────────────────────────────────────────────────────
@@ -325,7 +331,9 @@ async fn setze_modell(provider: String, model: String) -> Result<String, String>
         table.insert("model".to_string(), toml::Value::String(model.clone()));
     }
 
-    std::fs::write(&config_path, toml::to_string_pretty(&config).unwrap())
+    let serialisiert = toml::to_string_pretty(&config)
+        .map_err(|e| format!("famulus.toml serialisieren fehlgeschlagen: {e}"))?;
+    std::fs::write(&config_path, serialisiert)
         .map_err(|e| format!("famulus.toml schreiben fehlgeschlagen: {e}"))?;
 
     // Das Frontend soll sofort sehen, was jetzt gilt.
@@ -467,7 +475,7 @@ fn version() -> String {
 
 #[tauri::command]
 fn history_liste() -> Result<Vec<serde_json::Value>, String> {
-    let db = history_db();
+    let db = history_db()?;
     let eintraege = db.liste().map_err(|e| format!("{e:#}"))?;
     Ok(eintraege.iter().map(|e| {
         serde_json::json!({
@@ -483,7 +491,7 @@ fn history_liste() -> Result<Vec<serde_json::Value>, String> {
 
 #[tauri::command]
 fn history_suche(begriff: String) -> Result<Vec<serde_json::Value>, String> {
-    let db = history_db();
+    let db = history_db()?;
     let eintraege = db.suche(&begriff).map_err(|e| format!("{e:#}"))?;
     Ok(eintraege.iter().map(|e| {
         serde_json::json!({
@@ -499,7 +507,7 @@ fn history_suche(begriff: String) -> Result<Vec<serde_json::Value>, String> {
 
 #[tauri::command]
 fn history_speichern(id: Option<i64>, titel: String, nachrichten: String) -> Result<i64, String> {
-    let db = history_db();
+    let db = history_db()?;
     if let Some(id) = id {
         db.aktualisieren(id, &titel, &nachrichten).map_err(|e| format!("{e:#}"))?;
         Ok(id)
@@ -510,13 +518,13 @@ fn history_speichern(id: Option<i64>, titel: String, nachrichten: String) -> Res
 
 #[tauri::command]
 fn history_loeschen(id: i64) -> Result<(), String> {
-    let db = history_db();
+    let db = history_db()?;
     db.loeschen(id).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 fn history_archiv_liste() -> Result<Vec<serde_json::Value>, String> {
-    let db = history_db();
+    let db = history_db()?;
     let eintraege = db.archiv_liste().map_err(|e| format!("{e:#}"))?;
     Ok(eintraege.iter().map(|e| {
         serde_json::json!({
@@ -532,7 +540,7 @@ fn history_archiv_liste() -> Result<Vec<serde_json::Value>, String> {
 
 #[tauri::command]
 fn history_archivieren(id: i64, archiviert: bool) -> Result<(), String> {
-    let db = history_db();
+    let db = history_db()?;
     db.archivieren(id, archiviert).map_err(|e| format!("{e:#}"))
 }
 
@@ -568,6 +576,17 @@ fn ist_ios() -> bool {
 }
 
 pub fn run() {
+    // Ohne das verschwindet ein Panic in einem Tauri-Command oder einer
+    // spawn()-Task spurlos - die betroffene Aktion haengt oder tut
+    // scheinbar nichts, und niemand erfaehrt je, warum (siehe die
+    // reqwest::blocking- und history_db()-Faelle: beide waren echte
+    // Panics, keiner hat sich von selbst gemeldet). Der Hook ersetzt
+    // nicht das Beheben der eigentlichen Ursache, macht sie aber sofort
+    // sichtbar statt erst nach langem Suchen.
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("[famulus] PANIC: {info}");
+    }));
+
     tauri::Builder::default()
         .manage(LaufenderAuftrag(Mutex::new(None)))
         .setup(|_app| {
