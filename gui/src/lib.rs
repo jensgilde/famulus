@@ -113,7 +113,7 @@ fn starte_auftrag(
 
         match vorbereitung {
             Ok((config, provider)) => {
-                let agent = Agent::new(config, provider, Arc::clone(&ui));
+                let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
                 if let Err(e) = agent.run_task(&vorherige_nachrichten, &auftrag).await {
                     ui.ereignis(AgentEvent::Abgebrochen {
                         fehler: format!("{e:#}"),

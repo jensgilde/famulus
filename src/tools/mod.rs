@@ -18,6 +18,7 @@ pub trait Tool: Send + Sync {
 pub mod fs;
 pub mod shell;
 pub mod vault;
+pub mod notizbuch;
 
 /// Stellt die Werkzeuge zusammen, die dem Modell angeboten werden.
 ///

@@ -266,6 +266,63 @@ impl Tool for VaultSchreibenTool {
     }
 }
 
+/// Volltextsuche über den Vault-Index (Stufe 1 des Gedächtnis-Ausbaus).
+///
+/// Schneller Weg zu einer Stelle im Vault, wenn man ein Stichwort hat -
+/// die Alternative wäre, sich mit `vault_liste` + `vault_lesen` durch
+/// potenziell viele Dateien zu tasten. Braucht den Gedächtnis-Index
+/// (`Gedaechtnis::vault_index_aktualisieren`, läuft beim Start), nicht das
+/// Dateisystem direkt - deshalb kein Pfad-Check wie bei den anderen
+/// Vault-Werkzeugen: es werden nur bereits indizierte Schnipsel
+/// zurückgegeben, nichts wird geöffnet oder geschrieben.
+pub struct VaultSucheTool {
+    pub gedaechtnis: std::sync::Arc<crate::memory::Gedaechtnis>,
+}
+
+#[async_trait]
+impl Tool for VaultSucheTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "vault_suche".to_string(),
+            description:
+                "Durchsucht den Obsidian-Vault per Volltextsuche nach einem Stichwort - schneller \
+                 als vault_liste + vault_lesen, wenn du weißt, wonach du suchst. Gibt pro Treffer \
+                 den Dateipfad und einen kurzen Textausschnitt mit dem Fundort zurück."
+                    .to_string(),
+            parameters_schema: json!({
+                "type": "object",
+                "properties": {
+                    "begriff": {
+                        "type": "string",
+                        "description": "Suchbegriff oder kurze Phrase."
+                    }
+                },
+                "required": ["begriff"]
+            }),
+        }
+    }
+
+    async fn execute(
+        &self,
+        args: Value,
+        _permissions: &PermissionManager,
+    ) -> anyhow::Result<String> {
+        let begriff = args["begriff"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("'begriff' fehlt"))?;
+
+        let treffer = self.gedaechtnis.vault_suche(begriff, 10)?;
+        if treffer.is_empty() {
+            return Ok("Keine Treffer im Vault.".to_string());
+        }
+        Ok(treffer
+            .iter()
+            .map(|(pfad, schnipsel)| format!("- {pfad}: {schnipsel}"))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

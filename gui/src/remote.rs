@@ -247,7 +247,7 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
 
                         match vorbereitung {
                             Ok((config, provider)) => {
-                                let agent = Agent::new(config, provider, ui);
+                                let agent = Agent::new(config, provider, ui).await;
                                 if let Err(e) = agent.run_task(&verlauf, &auftrag).await {
                                     sende_event(&tx_for_task, &AgentEvent::Abgebrochen {
                                         fehler: format!("{e:#}"),

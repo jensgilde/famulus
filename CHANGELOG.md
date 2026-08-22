@@ -5,6 +5,47 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] – 2026-08-22
+
+### Hinzugefügt
+- **Gedächtnis-Ausbau in drei Stufen** (Famulus' eigener Vorschlag, von Claude
+  fertiggestellt, weil der ursprüngliche Stand nicht mehr lief):
+  - **Stufe 1 – FTS5**: `erinnerungen` und der Vault haben jetzt einen
+    SQLite-FTS5-Index mit BM25-Ranking statt reinem Wortüberlapp. Neu:
+    Tool `vault_suche` – bisher gab es zwar den Index, aber kein Werkzeug,
+    das ihn benutzt hätte.
+  - **Stufe 2 – Embeddings**: Semantische Suche via Ollama-Embeddings
+    (`qwen3:14b`) + Cosine Similarity, mit automatischem Rückfall auf
+    FTS5, wenn Ollama keine Embeddings ausliefert (`ollama serve
+    --embeddings` nötig, sonst inaktiv - kein Fehler, nur leiser Rückfall).
+  - **Stufe 3 – Notizbuch**: Tool `notizbuch`, mit dem der Agent sich
+    während der Arbeit Notizen macht; der Rückblick konsolidiert sie am
+    Ende in dauerhafte Erinnerungen.
+
+### Behoben
+- **Absturz bei jedem einzelnen Auftrag**: Die Embedding-Anbindung nutzte
+  `reqwest::blocking` innerhalb der Tokio-Runtime, unter der CLI wie GUI
+  laufen. Das crasht sofort mit "Cannot drop a runtime in a context where
+  blocking is not allowed" - Famulus konnte dadurch keinen einzigen
+  Auftrag mehr fertig bearbeiten. Fix: die komplette Embedding-Kette
+  (`embedding_berechnen`, `embedding_speichern`, `embeddings_nachholen`,
+  `relevante_semantisch`, `Agent::new`, `systemvorspann`) auf async
+  umgestellt, mit dem normalen `reqwest::Client` statt `reqwest::blocking`.
+- **Falscher Erfolgs-Zähler beim Embedding-Nachholen**: "114 Embeddings
+  nachgeholt" wurde geloggt, obwohl jedes einzelne fehlgeschlagen war -
+  der Zähler prüfte nur "kein Rust-Fehler", nicht "wirklich gespeichert".
+  Zusätzlich lief bei jedem Start ein Versuch pro fehlender Erinnerung,
+  auch wenn Ollama gar keine Embeddings unterstützt. Fix: einmaliger
+  Verfügbarkeits-Check vorab (`embeddings_verfuegbar`), `embedding_speichern`
+  meldet jetzt ehrlich zurück, ob wirklich eins gespeichert wurde.
+- **Frontend zeigte bei neuen Erinnerungen die falsche Kategorie**: Das
+  `AgentEvent`-Enum ist per `#[serde(tag = "art")]` getaggt - `ev.art` im
+  Frontend war deshalb immer `"gemmerkt"` (der Tag selbst), nie die
+  tatsächliche Kategorie. Musste `ev.kategorie` heißen.
+- Diverse Kompilierfehler/Warnungen behoben (Test-Feldname nach
+  `AgentEvent`-Umbenennung, Borrow-Checker-Probleme durch `?` als
+  Block-Tail-Ausdruck, unnötiges `mut`).
+
 ## [0.5.0] – 2026-08-22
 
 ### Hinzugefügt

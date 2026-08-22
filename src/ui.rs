@@ -8,22 +8,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "art", rename_all = "snake_case")]
 pub enum AgentEvent {
-    /// Auftrag angenommen, Schleife startet.
-    Gestartet { provider: String, auftrag: String },
-    /// Das Modell hat etwas gesagt, bevor es zum Werkzeug greift - meist,
-    /// was es vorhat. Früher fiel dieser Text unter den Tisch.
-    Denkt { text: String },
-    /// Das Modell will ein Werkzeug benutzen.
-    WerkzeugAufruf { name: String, argumente: String },
-    /// Das Werkzeug ist durchgelaufen (oder gescheitert - dann steht der
-    /// Fehler im Ergebnis).
-    WerkzeugErgebnis { name: String, ergebnis: String },
+    /// Ein Stück Text vom Modell (Streaming oder Antwort).
+    Text { chunk: String },
+    /// Ein Werkzeug-Aufruf beginnt.
+    ToolStart { name: String, args: serde_json::Value },
+    /// Ein Werkzeug-Aufruf ist beendet (Ergebnis oder Fehler).
+    ToolEnd { name: String, inhalt: String },
     /// Erinnerungen aus früheren Aufträgen wurden in den Kontext gelegt.
     Erinnert { anzahl: usize },
-    /// Der Rückblick hat neue Erkenntnisse ins Gedächtnis geschrieben.
-    Gelernt { anzahl: usize },
-    /// Das Modell ist fertig und hat eine finale Antwort.
-    Fertig { antwort: String },
+    /// Eine neue Erkenntnis wurde ins Gedächtnis geschrieben.
+    Gemmerkt { kategorie: String, inhalt: String },
+    /// Der Rückblick läuft (Notizbuch-Konsolidierung).
+    Reflektiere,
+    /// Der Auftrag ist fertig (finale Antwort wurde schon via Text gesendet).
+    Fertig,
     /// Der Auftrag ist abgebrochen (Fehler oder Limit erreicht).
     Abgebrochen { fehler: String },
 }
@@ -31,11 +29,6 @@ pub enum AgentEvent {
 /// Die Oberfläche, mit der Famulus spricht. Terminal und GUI implementieren
 /// beide dieses Trait - der Agent kennt nur diese eine Methode und weiß
 /// nicht, wo seine Ausgabe landet.
-///
-/// Hier stand früher zusätzlich eine `frage`-Methode für Berechtigungs-
-/// Rückfragen. Die ist weg: Famulus fragt nicht mehr, er macht. Wer das
-/// zurückhaben will, braucht wieder ein `Ask` in `permissions::Decision` -
-/// ohne das hätte eine Rückfrage niemanden, der sie auslöst.
 pub trait Ui: Send + Sync {
     /// Meldet ein Ereignis. Darf nicht blockieren.
     fn ereignis(&self, ereignis: AgentEvent);
@@ -49,14 +42,16 @@ impl Ui for TerminalUi {
         use colored::Colorize;
 
         match ereignis {
-            AgentEvent::Gestartet { provider, auftrag } => {
-                println!("{}", format!("→ Auftrag an {provider}: {auftrag}").cyan());
+            AgentEvent::Text { chunk } => {
+                print!("{}", chunk);
             }
-            AgentEvent::Denkt { text } => {
-                println!("{}", format!("  … {text}").dimmed());
+            AgentEvent::ToolStart { name, args } => {
+                println!("{}", format!("  ⚙ {name}({args})").yellow());
             }
-            AgentEvent::WerkzeugAufruf { name, argumente } => {
-                println!("{}", format!("  ⚙ {name}({argumente})").yellow());
+            AgentEvent::ToolEnd { name, inhalt: _ } => {
+                // Im Terminal absichtlich leise – Ergebnisse sind oft
+                // seitenlang und stehen ohnehin in der finalen Antwort.
+                let _ = name;
             }
             AgentEvent::Erinnert { anzahl } => {
                 println!(
@@ -64,16 +59,14 @@ impl Ui for TerminalUi {
                     format!("  ⌾ {anzahl} Erinnerungen im Kontext").dimmed()
                 );
             }
-            AgentEvent::Gelernt { anzahl } => {
-                println!("{}", format!("  ✎ {anzahl} neu gemerkt").dimmed());
+            AgentEvent::Gemmerkt { kategorie, inhalt } => {
+                println!("{}", format!("  ✎ ({kategorie}) {inhalt}").dimmed());
             }
-            AgentEvent::WerkzeugErgebnis { .. } => {
-                // Im Terminal absichtlich still: die Ergebnisse sind oft
-                // seitenlang und stehen ohnehin in der finalen Antwort.
-                // Die GUI kann sie ausklappbar anzeigen.
+            AgentEvent::Reflektiere => {
+                println!("{}", "  ⟳ Rückblick...".dimmed());
             }
-            AgentEvent::Fertig { .. } => {
-                println!("{}", "✔ Fertig".green().bold());
+            AgentEvent::Fertig => {
+                println!("\n{}", "✔ Fertig".green().bold());
             }
             AgentEvent::Abgebrochen { fehler } => {
                 eprintln!("\n{} {fehler}", "✗ Fehler:".red().bold());
@@ -95,40 +88,35 @@ mod tests {
     fn ereignis_kodierung_passt_zum_frontend() {
         let faelle = vec![
             (
-                AgentEvent::Gestartet {
-                    provider: "hyper".into(),
-                    auftrag: "tu was".into(),
+                AgentEvent::Text {
+                    chunk: "hallo".into(),
                 },
-                "gestartet",
+                "text",
             ),
             (
-                AgentEvent::Denkt {
-                    text: "ich schau mal nach".into(),
-                },
-                "denkt",
-            ),
-            (
-                AgentEvent::WerkzeugAufruf {
+                AgentEvent::ToolStart {
                     name: "run_shell".into(),
-                    argumente: "{}".into(),
+                    args: serde_json::json!({}),
                 },
-                "werkzeug_aufruf",
+                "tool_start",
             ),
             (
-                AgentEvent::WerkzeugErgebnis {
+                AgentEvent::ToolEnd {
                     name: "run_shell".into(),
-                    ergebnis: "ok".into(),
+                    inhalt: "ok".into(),
                 },
-                "werkzeug_ergebnis",
+                "tool_end",
             ),
             (AgentEvent::Erinnert { anzahl: 3 }, "erinnert"),
-            (AgentEvent::Gelernt { anzahl: 1 }, "gelernt"),
             (
-                AgentEvent::Fertig {
-                    antwort: "fertig".into(),
+                AgentEvent::Gemmerkt {
+                    kategorie: "fakt".into(),
+                    inhalt: "x".into(),
                 },
-                "fertig",
+                "gemmerkt",
             ),
+            (AgentEvent::Reflektiere, "reflektiere"),
+            (AgentEvent::Fertig, "fertig"),
             (
                 AgentEvent::Abgebrochen {
                     fehler: "kaputt".into(),
@@ -149,18 +137,17 @@ mod tests {
     /// Die Feldnamen, die das Fenster ausliest, müssen ebenfalls stimmen.
     #[test]
     fn ereignis_felder_heissen_wie_im_frontend() {
-        let json = serde_json::to_value(AgentEvent::WerkzeugAufruf {
+        let json = serde_json::to_value(AgentEvent::ToolStart {
             name: "read_file".into(),
-            argumente: "{\"path\":\"x\"}".into(),
+            args: serde_json::json!({"path": "x"}),
         })
         .unwrap();
         assert_eq!(json["name"], "read_file");
-        assert_eq!(json["argumente"], "{\"path\":\"x\"}");
 
-        let json = serde_json::to_value(AgentEvent::Fertig {
-            antwort: "hallo".into(),
+        let json = serde_json::to_value(AgentEvent::Text {
+            chunk: "hallo".into(),
         })
         .unwrap();
-        assert_eq!(json["antwort"], "hallo");
+        assert_eq!(json["chunk"], "hallo");
     }
 }

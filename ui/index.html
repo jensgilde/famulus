@@ -1242,22 +1242,20 @@ listen('famulus-ereignis', e => {
   const chat = aktiverChat();
 
   switch (ev.art) {
-    case 'gestartet':
-      break;
-    case 'denkt':
-      aktuellerDenktText = ev.text;
+    case 'text':
+      aktuellerDenktText = (aktuellerDenktText || '') + ev.chunk;
       renderMessages();
       renderStatusbar();
       break;
-    case 'werkzeug_aufruf':
-      aktuellerAgentSchritte.push({ art: 'werkzeug', name: ev.name, argumente: ev.argumente, ergebnis: null });
+    case 'tool_start':
+      aktuellerAgentSchritte.push({ art: 'werkzeug', name: ev.name, argumente: ev.args, ergebnis: null });
       aktuellerDenktText = '';
       renderMessages();
       renderStatusbar();
       break;
-    case 'werkzeug_ergebnis': {
+    case 'tool_end': {
       const letzter = [...aktuellerAgentSchritte].reverse().find(s => s.art === 'werkzeug' && s.name === ev.name && s.ergebnis === null);
-      if (letzter) letzter.ergebnis = ev.ergebnis;
+      if (letzter) letzter.ergebnis = ev.inhalt;
       renderMessages();
       break;
     }
@@ -1265,12 +1263,16 @@ listen('famulus-ereignis', e => {
       aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: `⌾ ${ev.anzahl} Erinnerungen im Kontext` });
       renderMessages();
       break;
-    case 'gelernt':
-      aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: `✎ ${ev.anzahl} neu gemerkt` });
+    case 'gemmerkt':
+      aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: `✎ (${ev.kategorie}) ${ev.inhalt}` });
+      renderMessages();
+      break;
+    case 'reflektiere':
+      aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: '⟳ Rückblick...' });
       renderMessages();
       break;
     case 'fertig':
-      chat.nachrichten.push({ rolle: 'assistant', inhalt: ev.antwort });
+      chat.nachrichten.push({ rolle: 'assistant', inhalt: aktuellerDenktText || ev.chunk || '' });
       speichereChats();
       aktuellerAgentSchritte = [];
       aktuellerDenktText = '';

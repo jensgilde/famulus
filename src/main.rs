@@ -29,16 +29,13 @@ async fn main() -> anyhow::Result<()> {
         .dimmed()
     );
 
-    // Die Oberfläche für die Kommandozeile: Ausgabe nach stdout, Rückfragen
-    // über die Tastatur. Die GUI hängt an derselben Stelle ihre eigene ein.
     let ui: Arc<dyn Ui> = Arc::new(TerminalUi);
-
     let provider = llm::build_provider(&config)?;
-    let agent = Agent::new(config, provider, Arc::clone(&ui));
+    let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
 
     match agent.run_task(&[], &cli.task).await {
-        Ok(result) => {
-            println!("\n{}\n{result}", "── Ergebnis ──".bold());
+        Ok(()) => {
+            println!("\n{}", "── Fertig ──".bold());
         }
         Err(e) => {
             eprintln!("\n{} {e}", "✗ Fehler:".red().bold());

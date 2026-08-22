@@ -1,19 +1,15 @@
 use crate::config::Config;
 use crate::llm::{LlmProvider, Message, ToolResult};
-use crate::memory::{Gedaechtnis, ART_FAKT, ART_LEKTION, ART_PRAEFERENZ};
+use crate::memory::{Gedaechtnis, ART_FAKT};
 use crate::presets::PresetsConfig;
 use crate::permissions::PermissionManager;
+use crate::tools::notizbuch::NotizbuchTool;
 use crate::tools::{all_tools, Tool};
 use crate::ui::{AgentEvent, Ui};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Wie viele Zeichen eines Werkzeug-Ergebnisses in den Kontext dürfen.
-///
-/// Der Deckel ist wichtiger, als er aussieht: Jedes Ergebnis bleibt bis zum
-/// Ende des Auftrags im Verlauf und wird in JEDEM weiteren Zug erneut
-/// mitgeschickt. Ein einziges `cargo build` ohne Deckel kostet bei zwanzig
-/// Zügen also zwanzig Mal seine eigene Länge - an Geld und an Wartezeit.
 const MAX_ERGEBNIS_ZEICHEN: usize = 8_000;
 
 pub struct Agent {
@@ -21,25 +17,17 @@ pub struct Agent {
     tools: HashMap<String, Box<dyn Tool>>,
     permissions: PermissionManager,
     ui: Arc<dyn Ui>,
-    /// Optional: Fällt die Datenbank aus, arbeitet Famulus ohne Gedächtnis
-    /// weiter. Ein kaputtes Gedächtnis darf den Agenten nicht lahmlegen.
     gedaechtnis: Option<Arc<Gedaechtnis>>,
     max_turns: u32,
     max_erinnerungen: usize,
     reflexion: bool,
     hat_vault: bool,
+    /// Stufe 2: Embeddings sind verfügbar (Ollama läuft mit --embeddings).
+    embeddings_aktiv: bool,
 }
 
 impl Agent {
-    pub fn new(config: Config, provider: Box<dyn LlmProvider>, ui: Arc<dyn Ui>) -> Self {
-        let tools: HashMap<String, Box<dyn Tool>> = all_tools(&config)
-            .into_iter()
-            .map(|t| (t.definition().name.clone(), t))
-            .collect();
-
-        // Das Gedächtnis wird hier geöffnet, nicht vom Aufrufer - so bekommen
-        // Kommandozeile und GUI es ohne doppelten Code, und es gibt nur einen
-        // Ort, an dem der Datenbankpfad steht.
+    pub async fn new(config: Config, provider: Box<dyn LlmProvider>, ui: Arc<dyn Ui>) -> Self {
         let gedaechtnis = match Gedaechtnis::standard() {
             Ok(g) => Some(Arc::new(g)),
             Err(e) => {
@@ -50,6 +38,64 @@ impl Agent {
             }
         };
 
+        let hat_vault = config.vault_pfad().is_some();
+
+        // ── Stufe 1+2: Vault-Index und Embeddings beim Start aktualisieren ─
+        if let Some(ref g) = gedaechtnis {
+            // Vault-Indizierung (Stufe 1).
+            if let Some(vault_pfad) = config.vault_pfad() {
+                match g.vault_index_aktualisieren(&vault_pfad) {
+                    Ok(n) => {
+                        ui.ereignis(AgentEvent::Erinnert { anzahl: n });
+                        eprintln!("[memory] Vault-Index: {n} Notizen indiziert");
+                    }
+                    Err(e) => {
+                        eprintln!("[memory] Vault-Index fehlgeschlagen: {e:#}");
+                    }
+                }
+            }
+
+            // Embeddings nachholen (Stufe 2).
+            match g.embeddings_nachholen().await {
+                Ok(n) if n > 0 => {
+                    eprintln!("[memory] {n} Embeddings nachgeholt");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("[memory] Embeddings nicht verfügbar: {e:#}");
+                }
+            }
+        }
+
+        // Prüfen, ob Embeddings funktionieren (einmalig - nicht bei jedem
+        // Auftrag neu, siehe embeddings_verfuegbar()).
+        let embeddings_aktiv = gedaechtnis.is_some() && Gedaechtnis::embeddings_verfuegbar().await;
+
+        let mut tools: HashMap<String, Box<dyn Tool>> = all_tools(&config)
+            .into_iter()
+            .map(|t| (t.definition().name.clone(), t))
+            .collect();
+
+        // ── Stufe 3: Notizbuch-Tool hinzufügen ─
+        if let Some(ref g) = gedaechtnis {
+            let notizbuch = Box::new(NotizbuchTool {
+                gedaechtnis: Arc::clone(g),
+            });
+            tools.insert(notizbuch.definition().name.clone(), notizbuch);
+        }
+
+        // ── Stufe 1: Vault-Suche-Tool (braucht den Gedächtnis-Index, kann
+        // deshalb nicht wie die anderen Vault-Tools über all_tools() aus
+        // der Config allein gebaut werden) ─
+        if hat_vault {
+            if let Some(ref g) = gedaechtnis {
+                let vault_suche = Box::new(crate::tools::vault::VaultSucheTool {
+                    gedaechtnis: Arc::clone(g),
+                });
+                tools.insert(vault_suche.definition().name.clone(), vault_suche);
+            }
+        }
+
         Self {
             provider,
             tools,
@@ -59,54 +105,63 @@ impl Agent {
             max_turns: config.max_turns,
             max_erinnerungen: config.max_erinnerungen,
             reflexion: config.reflexion,
-            hat_vault: config.vault_pfad().is_some(),
+            hat_vault,
+            embeddings_aktiv,
         }
     }
 
-    /// Baut den Vorspann: was Famulus über Jens weiß, und wie er mit dem
-    /// Vault umgehen soll.
-    ///
-    /// Das landet jetzt im System-Teil der Anfrage und nicht mehr als
-    /// getarnte Nutzer-Nachricht. Zwei Gründe: Es ist inhaltlich Anweisung
-    /// und nicht Gesprächsbeitrag, und es steht damit an der einzigen
-    /// Stelle, die sich während eines Auftrags nicht ändert - genau das,
-    /// was ein Anbieter zwischenspeichern kann.
-    fn systemvorspann(&self, auftrag: &str) -> Option<String> {
+    async fn systemvorspann(&self, auftrag: &str) -> Option<String> {
         let mut teile = Vec::new();
 
-        // 1. Aktives Preset (vom Nutzer gewähltes System-Prompt) – kommt
-        //    als erstes, damit es die Rolle definiert, bevor Gedächtnis und
-        //    Vault-Anweisungen folgen.
+        // 1. Aktives Preset.
         if let Ok(presets) = PresetsConfig::load() {
             if let Some(prompt) = presets.aktiver_prompt() {
                 teile.push(prompt.to_string());
             }
         }
 
-        // 2. Gedächtnis: was Famulus aus früheren Aufträgen über Jens weiß.
+        // 2. Gedächtnis: semantische Suche (Stufe 2) oder FTS5 (Stufe 1).
         if let Some(g) = &self.gedaechtnis {
-            if let Ok(erinnerungen) = g.relevante(auftrag, self.max_erinnerungen) {
-                if !erinnerungen.is_empty() {
-                    self.ui.ereignis(AgentEvent::Erinnert {
-                        anzahl: erinnerungen.len(),
-                    });
-                    let liste: Vec<String> = erinnerungen
-                        .iter()
-                        .map(|e| format!("- ({}) {}", e.art, e.inhalt))
-                        .collect();
+            let erinnerungen = if self.embeddings_aktiv {
+                g.relevante_semantisch(auftrag, self.max_erinnerungen)
+                    .await
+                    .unwrap_or_else(|_| g.relevante(auftrag, self.max_erinnerungen).unwrap_or_default())
+            } else {
+                g.relevante(auftrag, self.max_erinnerungen).unwrap_or_default()
+            };
+
+            if !erinnerungen.is_empty() {
+                self.ui.ereignis(AgentEvent::Erinnert {
+                    anzahl: erinnerungen.len(),
+                });
+                let liste: Vec<String> = erinnerungen
+                    .iter()
+                    .map(|e| format!("- ({}) {}", e.art, e.inhalt))
+                    .collect();
+                teile.push(format!(
+                    "Was du aus früheren Aufträgen weißt:\n{}",
+                    liste.join("\n")
+                ));
+            }
+
+            // Notizbuch-Inhalt vom letzten Auftrag (Stufe 3).
+            if let Ok(notizen) = g.notizbuch_lesen() {
+                if !notizen.is_empty() {
                     teile.push(format!(
-                        "Was du aus früheren Aufträgen weißt:\n{}",
-                        liste.join("\n")
+                        "Notizen aus deiner letzten Arbeitssitzung:\n{}",
+                        notizen.iter().map(|n| format!("- {n}")).collect::<Vec<_>>().join("\n")
                     ));
                 }
             }
         }
 
-        // 3. Vault-Anweisungen (nur wenn ein Vault-Pfad konfiguriert ist).
+        // 3. Vault-Anweisungen.
         if self.hat_vault {
             teile.push(
                 "Du hast einen Obsidian-Vault als Langzeitgedächtnis über Jens. \
-                 Vor nicht-trivialer Hilfe: mit vault_liste schauen, was schon bekannt ist, \
+                 Hast du ein konkretes Stichwort, nutze vault_suche - das ist schneller als \
+                 sich mit vault_liste durch alle Notizen zu tasten. Für einen groben Überblick \
+                 stattdessen mit vault_liste schauen, was schon bekannt ist, \
                  und Passendes mit vault_lesen öffnen. Lernst du etwas Dauerhaftes über Jens, \
                  seine Projekte oder Ziele, schreib es mit vault_notiz dorthin - bestehende \
                  Notizen ergänzen statt Dubletten anlegen, Wikilinks [[so]] benutzen, bei \
@@ -116,229 +171,224 @@ impl Agent {
             );
         }
 
+        // 4. Notizbuch-Anweisung (Stufe 3).
+        if self.gedaechtnis.is_some() {
+            teile.push(
+                "Du hast ein Notizbuch (Tool: notizbuch). Nutze es, um dir während der Arbeit \
+                 wichtige Erkenntnisse zu merken – Fakten über Jens, seine Präferenzen, \
+                 technische Details oder Lektionen. Schreibe es knapp und präzise. \
+                 Am Ende des Auftrags wird das Notizbuch automatisch ins Langzeitgedächtnis \
+                 übernommen."
+                    .to_string(),
+            );
+        }
+
         (!teile.is_empty()).then(|| teile.join("\n\n"))
     }
 
-    /// Führt einen Auftrag vollständig aus - läuft die Beobachten-Denken-
-    /// Handeln-Schleife, bis das Modell eine finale Text-Antwort gibt oder
-    /// max_turns erreicht ist (Sicherheitsnetz gegen Endlosschleifen).
-    ///
-    /// `vorherige_nachrichten` ist der bisherige Gesprächsverlauf des Chats,
-    /// in dem dieser Auftrag steht - leer für einen neuen Chat oder das CLI
-    /// (das kein Chat-Konzept kennt). Famulus selbst hält keinen Verlauf
-    /// zwischen Aufrufen fest, das übernimmt die Oberfläche (siehe
-    /// `ui/index.html`, `localStorage`) - der Agent bekommt ihn bei jedem
-    /// Auftrag frisch mitgegeben.
+    /// Führt einen Auftrag vollständig aus.
     pub async fn run_task(
         &self,
         vorherige_nachrichten: &[Message],
-        task: &str,
-    ) -> anyhow::Result<String> {
-        self.ui.ereignis(AgentEvent::Gestartet {
-            provider: self.provider.name().to_string(),
-            auftrag: task.to_string(),
-        });
+        auftrag: &str,
+    ) -> anyhow::Result<()> {
+        let system = self.systemvorspann(auftrag).await;
 
-        let ergebnis = self.auftrag_ausfuehren(vorherige_nachrichten, task).await;
+        let mut nachrichten: Vec<Message> = vorherige_nachrichten.to_vec();
+        nachrichten.push(Message::User(auftrag.to_string()));
 
-        // Protokoll und Rückblick laufen NACH dem Auftrag und dürfen sein
-        // Ergebnis nicht mehr verändern - auch nicht, wenn sie selbst
-        // scheitern. Ein misslungener Rückblick ist ärgerlich, aber kein
-        // Grund, eine erledigte Arbeit als Fehler zu melden.
-        if let Some(g) = &self.gedaechtnis {
-            let (text, erfolg) = match &ergebnis {
-                Ok(t) => (t.clone(), true),
-                Err(e) => (format!("{e:#}"), false),
-            };
-            if let Err(e) = g.auftrag_protokollieren(task, &text, erfolg) {
-                eprintln!("[famulus] Auftrag nicht protokolliert: {e:#}");
-            }
-            if self.reflexion && erfolg {
-                self.rueckblick(task, &text).await;
-            }
-        }
-
-        ergebnis
-    }
-
-    /// Die eigentliche Beobachten-Denken-Handeln-Schleife.
-    async fn auftrag_ausfuehren(
-        &self,
-        vorherige_nachrichten: &[Message],
-        task: &str,
-    ) -> anyhow::Result<String> {
-        let system = self.systemvorspann(task);
         let tool_defs: Vec<_> = self.tools.values().map(|t| t.definition()).collect();
-        let mut messages = vorherige_nachrichten.to_vec();
-        messages.push(Message::User(task.to_string()));
 
         for turn in 0..self.max_turns {
             let antwort = self
                 .provider
-                .next(system.as_deref(), &messages, &tool_defs)
+                .next(system.as_deref(), &nachrichten, &tool_defs)
                 .await?;
 
-            if antwort.ist_fertig() {
-                self.ui.ereignis(AgentEvent::Fertig {
-                    antwort: antwort.text.clone(),
-                });
-                return Ok(antwort.text);
-            }
-
-            // Sagt das Modell etwas, bevor es zum Werkzeug greift, ist das
-            // für Jens interessant - und es geht nicht mehr verloren.
-            if !antwort.text.trim().is_empty() {
-                self.ui.ereignis(AgentEvent::Denkt {
-                    text: antwort.text.clone(),
+            // Text ausgeben.
+            if !antwort.text.is_empty() {
+                self.ui.ereignis(AgentEvent::Text {
+                    chunk: antwort.text.clone(),
                 });
             }
 
-            // Der geplante Zug kommt als das in den Verlauf, was er ist:
-            // eine Assistant-Nachricht mit echten Werkzeug-Aufrufen. Früher
-            // stand hier ein nachgebauter Textschnipsel - das Modell konnte
-            // seine eigenen Aufrufe damit nicht sauber wiedererkennen.
-            messages.push(Message::Assistant {
-                text: antwort.text.clone(),
-                tool_calls: antwort.tool_calls.clone(),
-            });
+            // Werkzeug-Aufrufe ausführen.
+            if !antwort.tool_calls.is_empty() {
+                let mut ergebnisse = Vec::new();
+                for tc in &antwort.tool_calls {
+                    self.ui.ereignis(AgentEvent::ToolStart {
+                        name: tc.name.clone(),
+                        args: tc.arguments.clone(),
+                    });
 
-            let mut ergebnisse = Vec::new();
-            for call in &antwort.tool_calls {
-                self.ui.ereignis(AgentEvent::WerkzeugAufruf {
-                    name: call.name.clone(),
-                    argumente: call.arguments.to_string(),
+                    let ergebnis = match self.tools.get(&tc.name) {
+                        Some(tool) => match tool
+                            .execute(tc.arguments.clone(), &self.permissions)
+                            .await
+                        {
+                            Ok(inhalte) => {
+                                let gekuerzt = kuerzen(&inhalte, MAX_ERGEBNIS_ZEICHEN);
+                                self.ui.ereignis(AgentEvent::ToolEnd {
+                                    name: tc.name.clone(),
+                                    inhalt: gekuerzt.clone(),
+                                });
+                                ToolResult {
+                                    call_id: tc.id.clone(),
+                                    inhalt: gekuerzt,
+                                    fehler: false,
+                                }
+                            }
+                            Err(e) => {
+                                let fehler_text = format!("{e:#}");
+                                self.ui.ereignis(AgentEvent::ToolEnd {
+                                    name: tc.name.clone(),
+                                    inhalt: fehler_text.clone(),
+                                });
+                                ToolResult {
+                                    call_id: tc.id.clone(),
+                                    inhalt: fehler_text,
+                                    fehler: true,
+                                }
+                            }
+                        },
+                        None => {
+                            let fehler_text = format!("Unbekanntes Werkzeug: {}", tc.name);
+                            self.ui.ereignis(AgentEvent::ToolEnd {
+                                name: tc.name.clone(),
+                                inhalt: fehler_text.clone(),
+                            });
+                            ToolResult {
+                                call_id: tc.id.clone(),
+                                inhalt: fehler_text,
+                                fehler: true,
+                            }
+                        }
+                    };
+                    ergebnisse.push(ergebnis);
+                }
+
+                // Assistant-Nachricht mit Tool-Calls.
+                nachrichten.push(Message::Assistant {
+                    text: antwort.text,
+                    tool_calls: antwort.tool_calls,
+                });
+                nachrichten.push(Message::ToolResults(ergebnisse));
+            } else {
+                // Keine Werkzeuge mehr: das war die finale Antwort.
+                nachrichten.push(Message::Assistant {
+                    text: antwort.text,
+                    tool_calls: Vec::new(),
                 });
 
-                let (inhalt, fehler) = match self.tools.get(&call.name) {
-                    Some(tool) => match tool
-                        .execute(call.arguments.clone(), &self.permissions)
-                        .await
-                    {
-                        Ok(text) => (text, false),
-                        Err(e) => (format!("FEHLER: {e}"), true),
-                    },
-                    None => (format!("FEHLER: unbekanntes Tool '{}'", call.name), true),
-                };
+                self.ui.ereignis(AgentEvent::Fertig);
 
-                self.ui.ereignis(AgentEvent::WerkzeugErgebnis {
-                    name: call.name.clone(),
-                    ergebnis: inhalt.clone(),
-                });
-
-                ergebnisse.push(ToolResult {
-                    call_id: call.id.clone(),
-                    // Die Oberfläche bekommt oben das volle Ergebnis; nur
-                    // was ins Modell wandert, wird gedeckelt.
-                    inhalt: kuerzen(&inhalt, MAX_ERGEBNIS_ZEICHEN),
-                    fehler,
-                });
-            }
-
-            // Alle Ergebnisse eines Zuges in EINER Nachricht - siehe die
-            // Anmerkung an `Message::ToolResults`.
-            messages.push(Message::ToolResults(ergebnisse));
-
-            if turn == self.max_turns - 1 {
-                anyhow::bail!(
-                    "Maximale Anzahl an Schritten ({}) erreicht, ohne dass das Modell fertig war. Aufgabe evtl. zu groß oder Modell dreht sich im Kreis.",
-                    self.max_turns
-                );
+                // ── Rückblick + Notizbuch-Konsolidierung (Stufe 3) ──
+                if self.reflexion {
+                    self.reflektieren(auftrag, turn + 1).await;
+                }
+                return Ok(());
             }
         }
 
-        unreachable!()
+        // Max Turns erreicht.
+        self.ui.ereignis(AgentEvent::Abgebrochen {
+            fehler: format!(
+                "Maximale Anzahl von {} Schritten erreicht – Auftrag abgebrochen.",
+                self.max_turns
+            ),
+        });
+        Ok(())
     }
 
-    /// Schaut nach getaner Arbeit zurück und merkt sich, was dauerhaft
-    /// nützlich ist.
-    ///
-    /// Das ist der Unterschied zwischen einem Agenten, der jedes Mal bei null
-    /// anfängt, und einem, der besser wird. Bewusst ein eigener Aufruf OHNE
-    /// Werkzeuge: Der Rückblick soll nachdenken, nicht nochmal handeln.
-    async fn rueckblick(&self, auftrag: &str, ergebnis: &str) {
-        let Some(gedaechtnis) = &self.gedaechtnis else {
+    /// Rückblick: nach jedem Auftrag Erkenntnisse ziehen und merken.
+    async fn reflektieren(&self, auftrag: &str, zuege: u32) {
+        let Some(g) = &self.gedaechtnis else {
             return;
         };
 
-        // Lange Ergebnisse kürzen - der Rückblick soll nicht teurer werden
-        // als der Auftrag selbst.
-        let gekuerzt = kuerzen(ergebnis, 2_000);
+        self.ui.ereignis(AgentEvent::Reflektiere);
 
-        let frage = format!(
-            "Du hast gerade einen Auftrag erledigt. Blick kurz zurück.\n\n\
-             AUFTRAG:\n{auftrag}\n\nERGEBNIS:\n{gekuerzt}\n\n\
-             Gibt es daraus etwas, das dauerhaft wert ist, gemerkt zu werden? Kategorien:\n\
-             - \"{ART_PRAEFERENZ}\": wie Jens Dinge haben will\n\
-             - \"{ART_FAKT}\": wie sein System oder seine Projekte beschaffen sind\n\
-             - \"{ART_LEKTION}\": was schiefging und wie man es künftig vermeidet\n\n\
-             Strenge Regeln:\n\
-             - Höchstens 3 Einträge, lieber keinen als einen belanglosen.\n\
-             - Nur Dauerhaftes. Nichts, was nur für diesen einen Auftrag galt.\n\
-             - Niemals Geheimnisse: keine Passwörter, API-Keys, Tokens.\n\
-             - Jeder Eintrag ein vollständiger, für sich verständlicher Satz.\n\n\
-             Antworte AUSSCHLIESSLICH mit JSON, ohne Erklärung drumherum:\n\
-             {{\"erinnerungen\":[{{\"art\":\"fakt\",\"inhalt\":\"...\"}}]}}\n\
-             Nichts Merkenswertes? Dann {{\"erinnerungen\":[]}}"
-        );
+        // ── Stufe 3: Notizbuch auslesen und konsolidieren ──
+        let notizen = g.notizbuch_lesen().unwrap_or_default();
+        if !notizen.is_empty() {
+            let notiz_text = notizen
+                .iter()
+                .enumerate()
+                .map(|(i, n)| format!("{}. {n}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
 
-        // Keine Werkzeuge anbieten - siehe oben.
-        let antwort = match self
-            .provider
-            .next(None, &[Message::User(frage)], &[])
-            .await
-        {
-            Ok(a) if a.ist_fertig() => a.text,
-            Ok(_) => return, // wollte handeln statt denken
-            Err(e) => {
-                eprintln!("[famulus] Rückblick fehlgeschlagen: {e:#}");
-                return;
+            let prompt = format!(
+                "Du hast dir während der Arbeit folgende Notizen gemacht:\n\n{notiz_text}\n\n\
+                 Überführe jede Notiz in eine dauerhafte Erinnerung. Gib ein JSON-Objekt zurück:\n\
+                 {{\"erinnerungen\": [{{\"art\": \"praeferenz|fakt|lektion\", \"inhalt\": \"...\"}}]}}\n\
+                 Doppelte Erinnerungen weglassen. Nur antworten mit dem JSON."
+            );
+
+            let tool_defs = Vec::new();
+            let nachrichten = vec![Message::User(prompt)];
+
+            if let Ok(antwort) = self.provider.next(None, &nachrichten, &tool_defs).await {
+                if let Some(json) = json_herausschneiden(&antwort.text) {
+                    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json) {
+                        if let Some(liste) = obj["erinnerungen"].as_array() {
+                            for eintrag in liste {
+                                let art = eintrag["art"].as_str().unwrap_or(ART_FAKT);
+                                let inhalt = eintrag["inhalt"].as_str().unwrap_or("");
+                                if g.merken_und_einbetten(art, inhalt, "notizbuch").await.unwrap_or(false) {
+                                    self.ui.ereignis(AgentEvent::Gemmerkt {
+                                        kategorie: art.to_string(),
+                                        inhalt: inhalt.to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
-        };
 
-        let Some(json) = json_herausschneiden(&antwort) else {
-            return;
-        };
-        let Ok(geparst) = serde_json::from_str::<serde_json::Value>(&json) else {
-            return;
-        };
-        let Some(eintraege) = geparst["erinnerungen"].as_array() else {
-            return;
-        };
-
-        let mut neu = 0usize;
-        for eintrag in eintraege.iter().take(3) {
-            let art = match eintrag["art"].as_str() {
-                Some(a) if [ART_PRAEFERENZ, ART_FAKT, ART_LEKTION].contains(&a) => a,
-                // Unbekannte Kategorie: lieber als Fakt ablegen als wegwerfen.
-                _ => ART_FAKT,
-            };
-            let Some(inhalt) = eintrag["inhalt"].as_str() else {
-                continue;
-            };
-            match gedaechtnis.merken(art, inhalt, auftrag) {
-                Ok(true) => neu += 1,
-                Ok(false) => {} // kannte er schon
-                Err(e) => eprintln!("[famulus] Erinnerung nicht gespeichert: {e:#}"),
-            }
+            // Notizbuch leeren nach erfolgreicher Konsolidierung.
+            let _ = g.notizbuch_leeren();
         }
 
-        if neu > 0 {
-            self.ui.ereignis(AgentEvent::Gelernt { anzahl: neu });
+        // ── Klassischer Rückblick auf den Auftrag selbst ──
+        let prompt = format!(
+            "Du hast gerade diesen Auftrag in {zuege} Zügen bearbeitet:\n\n{auftrag}\n\n\
+             Was hast du daraus über Jens, das System oder die Arbeitsweise gelernt? \
+             Gib ein JSON-Objekt zurück:\n\
+             {{\"erinnerungen\": [{{\"art\": \"praeferenz|fakt|lektion\", \"inhalt\": \"...\"}}]}}\n\
+             Nur neue Erkenntnisse, die du noch nicht wusstest. Maximal 3. \
+             Nur antworten mit dem JSON."
+        );
+
+        let nachrichten = vec![Message::User(prompt)];
+        let tool_defs = Vec::new();
+
+        if let Ok(antwort) = self.provider.next(None, &nachrichten, &tool_defs).await {
+            if let Some(json) = json_herausschneiden(&antwort.text) {
+                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if let Some(liste) = obj["erinnerungen"].as_array() {
+                        for eintrag in liste {
+                            let art = eintrag["art"].as_str().unwrap_or(ART_FAKT);
+                            let inhalt = eintrag["inhalt"].as_str().unwrap_or("");
+                            if g.merken_und_einbetten(art, inhalt, "rueckblick").await.unwrap_or(false) {
+                                self.ui.ereignis(AgentEvent::Gemmerkt {
+                                    kategorie: art.to_string(),
+                                    inhalt: inhalt.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-/// Kürzt lange Ausgaben auf ein erträgliches Maß und behält dabei Anfang und
-/// Ende.
-///
-/// Anfang und Ende statt nur Anfang, weil bei Befehlsausgaben beides zählt:
-/// vorne steht, was gemacht wurde, hinten die Fehlermeldung und der Exit-Code.
-/// Wer nur vorne abschneidet, wirft ausgerechnet das Ergebnis weg.
+/// Kürzt einen Text auf eine maximale Zeichenzahl.
 fn kuerzen(text: &str, hoechstens: usize) -> String {
-    // Schneller Ausweg für den Normalfall: Ein Zeichen belegt in UTF-8 nie
-    // weniger als ein Byte, also sind wenige Bytes garantiert wenige Zeichen.
-    if text.len() <= hoechstens {
-        return text.to_string();
+    if text.is_empty() {
+        return String::new();
     }
     let gesamt = text.chars().count();
     if gesamt <= hoechstens {
@@ -364,11 +414,6 @@ fn kuerzen(text: &str, hoechstens: usize) -> String {
     )
 }
 
-/// Holt das JSON-Objekt aus einer Modellantwort.
-///
-/// Modelle umrahmen JSON gern mit ```json-Blöcken oder einem freundlichen
-/// Satz davor. Statt darauf zu vertrauen, dass sie es diesmal lassen,
-/// schneiden wir von der ersten `{` bis zur letzten `}`.
 fn json_herausschneiden(text: &str) -> Option<String> {
     let start = text.find('{')?;
     let ende = text.rfind('}')?;
@@ -415,8 +460,6 @@ mod tests {
         assert!(raus.chars().count() < 300, "immer noch zu lang");
     }
 
-    /// Umlaute belegen mehrere Bytes. Würde an Byte-Grenzen geschnitten,
-    /// bräche das Programm hier mit einer Panik ab.
     #[test]
     fn kuerzen_verkraftet_umlaute() {
         let text = "ä".repeat(5_000);
