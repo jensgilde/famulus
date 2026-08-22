@@ -5,6 +5,25 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] – 2026-08-22
+
+### Behoben
+- **Stufe 2 (Embeddings) war inaktiv, weil das falsche Modell benutzt wurde.**
+  `qwen3:14b` (Famulus' Chat-Modell) hat laut Ollama keine "embedding"-
+  Fähigkeit; `/api/embeddings` lehnte jede Anfrage ab mit "This server does
+  not support embeddings. Start it with `--embeddings`" - eine Fehlermeldung,
+  die einen Server-Start-Flag suggeriert, den es in dieser Ollama-Version
+  (0.32.15) gar nicht gibt (`ollama serve --help` kennt kein `--embeddings`).
+  Tatsächlich ist es eine Modell-Eigenschaft, kein Server-Flag.
+- **Fix**: dediziertes Embedding-Modell `nomic-embed-text` gepullt (274 MB)
+  und in `embedding_berechnen` fest verdrahtet (`EMBEDDING_MODELL`-Konstante).
+  Nebeneffekt: deutlich schneller und leichter als ein 14B-Chat-Modell für
+  Embeddings zu zweckentfremden.
+- Verifiziert: 125 Erinnerungen mit korrekten 768-dimensionalen Vektoren
+  in der DB, `embeddings_nachholen` meldet jetzt einen echten Erfolgs-
+  Zähler statt der vorherigen Fehlmeldung "114 nachgeholt" bei 0
+  tatsächlich gespeicherten Embeddings.
+
 ## [0.6.0] – 2026-08-22
 
 ### Hinzugefügt

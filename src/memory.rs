@@ -4,9 +4,15 @@
 //!
 //! - **Stufe 1 (FTS5):** Volltextsuche für Erinnerungen und Vault. Ersetzt
 //!   das alte Keyword-Matching durch BM25-Ranking von SQLite.
-//! - **Stufe 2 (Embeddings):** Semantische Vektor-Suche via Ollama. qwen3:14b
-//!   generiert Embedding-Vektoren, Cosine Similarity in Rust. Erkennt, dass
-//!   "Code-Signing-Fix" und "Zertifikat" zusammengehören.
+//! - **Stufe 2 (Embeddings):** Semantische Vektor-Suche via Ollama.
+//!   `nomic-embed-text` generiert Embedding-Vektoren, Cosine Similarity in
+//!   Rust. Erkennt, dass "Code-Signing-Fix" und "Zertifikat" zusammengehören.
+//!   Bewusst ein dediziertes Embedding-Modell statt qwen3:14b (dem Chat-
+//!   Modell, das Famulus sonst benutzt): qwen3:14b hat laut Ollama keine
+//!   "embedding"-Fähigkeit und `/api/embeddings` lehnt es rundweg ab - ein
+//!   14B-Chat-Modell für Embeddings zu zweckentfremden wäre ohnehin
+//!   Ressourcenverschwendung gegenüber einem 274-MB-Modell, das genau
+//!   dafür gebaut ist.
 //! - **Stufe 3 (Notizbuch):** Der Agent kann sich während der Arbeit selbst
 //!   Notizen machen und diese später konsolidieren – echtes In-Task-Lernen.
 //!
@@ -31,6 +37,10 @@ pub struct Erinnerung {
 pub const ART_PRAEFERENZ: &str = "praeferenz"; // wie Jens Dinge haben will
 pub const ART_FAKT: &str = "fakt"; // wie das System/Projekt beschaffen ist
 pub const ART_LEKTION: &str = "lektion"; // was beim Arbeiten schiefging
+
+/// Dediziertes Embedding-Modell für Stufe 2. Muss vorher gepullt sein:
+/// `ollama pull nomic-embed-text` (274 MB, kein extra Server-Flag nötig).
+const EMBEDDING_MODELL: &str = "nomic-embed-text";
 
 pub struct Gedaechtnis {
     verbindung: Mutex<Connection>,
@@ -331,8 +341,8 @@ impl Gedaechtnis {
     /// ("Cannot drop a runtime in a context where blocking is not allowed"),
     /// weil er versucht, innerhalb eines laufenden Runtime-Threads eine
     /// zweite Runtime aufzumachen.
-    /// Prüft, ob Ollama gerade Embeddings ausliefert (also mit `--embeddings`
-    /// läuft). Wird einmal beim Start aufgerufen, damit `relevante_semantisch`
+    /// Prüft, ob Ollama gerade erreichbar ist und `nomic-embed-text` Embeddings
+    /// ausliefert. Wird einmal beim Start aufgerufen, damit `relevante_semantisch`
     /// nicht bei jedem einzelnen Auftrag erneut einen zum Scheitern
     /// verurteilten Netzwerk-Aufruf macht, wenn Ollama das eh nicht kann.
     pub async fn embeddings_verfuegbar() -> bool {
@@ -343,7 +353,7 @@ impl Gedaechtnis {
         let resp = reqwest::Client::new()
             .post("http://localhost:11434/api/embeddings")
             .json(&serde_json::json!({
-                "model": "qwen3:14b",
+                "model": EMBEDDING_MODELL,
                 "prompt": text
             }))
             .timeout(std::time::Duration::from_secs(10))
