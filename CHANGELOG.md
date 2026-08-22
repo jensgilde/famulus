@@ -5,6 +5,32 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] – 2026-08-22
+
+### Hinzugefügt
+- **Provider-Router mit Fallback** (`src/llm/router.rs`): `RouterProvider`
+  implementiert `LlmProvider` genauso wie jeder echte Anbieter (Decorator-
+  Muster) - `agent.rs` musste dafür nicht angefasst werden. Ohne
+  konfigurierten Fallback (Normalfall) liegt genau ein Provider in der
+  Liste, Verhalten ist identisch zu vorher.
+- **`fallback_providers` in `famulus.toml`** (optional, leer = altes
+  Verhalten): Reihe von Ausweich-Providern, die der Reihe nach probiert
+  werden, wenn der Hauptprovider fehlschlägt (Netzwerk, Rate-Limit,
+  Timeout), statt den Auftrag abzubrechen.
+- **Scorecard** (`provider_statistik`-Tabelle in `gedaechtnis.db`):
+  protokolliert jeden Modellaufruf (Provider, Erfolg, Dauer). CLI zeigt am
+  Ende eines Auftrags eine Zusammenfassung (Aufrufe, Erfolgsquote,
+  Durchschnittslatenz je Provider).
+
+### Bewusst nicht gemacht
+- Kein dynamisches Umsortieren nach Erfolgsquote oder kostenbasiertes
+  Routing - `LlmAntwort` liefert keine Token-/Kosten-Daten, dafür müssten
+  erst alle Provider-Implementierungen erweitert werden. Die Statistik wird
+  trotzdem von Anfang an mitgeschrieben.
+- Kein Docker-Sandboxing für Tool-Ausführung (Idee kam ursprünglich aus
+  einem KI-OS-Vergleich) - widerspricht Famulus' bewusster
+  Sicherheitsphilosophie (voller Rechnerzugriff, siehe README). Bleibt so.
+
 ## [0.6.1] – 2026-08-22
 
 ### Behoben

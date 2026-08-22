@@ -32,6 +32,15 @@ pub struct Erinnerung {
     pub inhalt: String,
 }
 
+/// Aggregierte Bilanz eines Providers über alle bisherigen Aufrufe.
+#[derive(Debug, Clone)]
+pub struct ProviderStatistik {
+    pub provider: String,
+    pub anzahl: i64,
+    pub erfolgsquote: f64,
+    pub durchschnitt_ms: f64,
+}
+
 /// Womit man es zu tun hat. Bewusst wenige Kategorien - je mehr Schubladen,
 /// desto öfter landet etwas in der falschen.
 pub const ART_PRAEFERENZ: &str = "praeferenz"; // wie Jens Dinge haben will
@@ -116,6 +125,17 @@ impl Gedaechtnis {
                 id       INTEGER PRIMARY KEY,
                 inhalt   TEXT NOT NULL,
                 erstellt TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            );",
+        )?;
+
+        // ── Provider-Statistik (Router-Scorecard) ──────────────────────
+        verbindung.execute_batch(
+            "CREATE TABLE IF NOT EXISTS provider_statistik (
+                id        INTEGER PRIMARY KEY,
+                provider  TEXT NOT NULL,
+                erfolg    INTEGER NOT NULL,
+                dauer_ms  INTEGER NOT NULL,
+                zeitpunkt TEXT NOT NULL DEFAULT (datetime('now','localtime'))
             );",
         )?;
 
@@ -577,6 +597,50 @@ impl Gedaechtnis {
         Ok(())
     }
 
+    // ── Provider-Statistik (Router-Scorecard) ──────────────────────────
+
+    /// Protokolliert einen Modellaufruf. Wird vom Router nach jedem Versuch
+    /// aufgerufen - auch nach fehlgeschlagenen, damit die Erfolgsquote
+    /// stimmt. Rein additiv: kein Aufrufer wertet den Rückgabewert aus,
+    /// ein Fehler hier darf nie die eigentliche Modellantwort verhindern.
+    pub fn provider_aufruf_protokollieren(
+        &self,
+        provider: &str,
+        erfolg: bool,
+        dauer_ms: u64,
+    ) -> Result<()> {
+        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        verbindung.execute(
+            "INSERT INTO provider_statistik (provider, erfolg, dauer_ms) VALUES (?1, ?2, ?3)",
+            params![provider, erfolg as i64, dauer_ms as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Erfolgsquote und Durchschnittslatenz je Provider, absteigend nach
+    /// Aufrufzahl. `erfolgsquote` ist 0.0-1.0 (SQLite AVG über 0/1-Werte).
+    pub fn provider_statistik(&self) -> Result<Vec<ProviderStatistik>> {
+        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let mut stmt = verbindung.prepare(
+            "SELECT provider, count(*), avg(erfolg), avg(dauer_ms)
+             FROM provider_statistik
+             GROUP BY provider
+             ORDER BY count(*) DESC",
+        )?;
+        let ergebnisse = stmt
+            .query_map([], |zeile| {
+                Ok(ProviderStatistik {
+                    provider: zeile.get(0)?,
+                    anzahl: zeile.get(1)?,
+                    erfolgsquote: zeile.get(2)?,
+                    durchschnitt_ms: zeile.get(3)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ergebnisse)
+    }
+
     pub fn anzahl(&self) -> Result<usize> {
         let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
         let n: i64 = verbindung.query_row("SELECT count(*) FROM erinnerungen", [], |r| r.get(0))?;
@@ -728,6 +792,35 @@ mod tests {
         assert_eq!(notizen.len(), 2);
         g.notizbuch_leeren().unwrap();
         assert!(g.notizbuch_lesen().unwrap().is_empty());
+        std::fs::remove_file(pfad).ok();
+    }
+
+    #[test]
+    fn provider_statistik_rechnet_erfolgsquote_und_durchschnitt() {
+        let pfad = temp();
+        let g = Gedaechtnis::oeffnen(&pfad).unwrap();
+        g.provider_aufruf_protokollieren("hyper", true, 1000)
+            .unwrap();
+        g.provider_aufruf_protokollieren("hyper", true, 2000)
+            .unwrap();
+        g.provider_aufruf_protokollieren("hyper", false, 3000)
+            .unwrap();
+        g.provider_aufruf_protokollieren("openrouter", true, 500)
+            .unwrap();
+
+        let statistik = g.provider_statistik().unwrap();
+        let hyper = statistik.iter().find(|s| s.provider == "hyper").unwrap();
+        assert_eq!(hyper.anzahl, 3);
+        assert!((hyper.erfolgsquote - (2.0 / 3.0)).abs() < 0.001);
+        assert!((hyper.durchschnitt_ms - 2000.0).abs() < 0.001);
+
+        let openrouter = statistik
+            .iter()
+            .find(|s| s.provider == "openrouter")
+            .unwrap();
+        assert_eq!(openrouter.anzahl, 1);
+        assert!((openrouter.erfolgsquote - 1.0).abs() < 0.001);
+
         std::fs::remove_file(pfad).ok();
     }
 }

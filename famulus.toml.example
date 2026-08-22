@@ -14,6 +14,17 @@ provider = "hyper"
 # Optional: aus welcher Umgebungsvariable der API-Key kommt.
 # api_key_env = "HYPER_API_KEY"
 
+# Optional: Ausweich-Provider, der Reihe nach versucht wird, wenn der
+# Hauptprovider fehlschlägt (Netzwerk, Rate-Limit, Timeout). Weglassen = kein
+# Fallback, schlägt der Hauptprovider fehl, bricht der Auftrag ab (wie bisher).
+# Mehrere [[fallback_providers]]-Blöcke möglich, werden der Reihe nach
+# durchprobiert. Jeder benutzt Standard-Adresse und Standard-Key seines
+# Providers.
+#
+# [[fallback_providers]]
+# provider = "openrouter"
+# model = "openai/gpt-4o"
+
 # Sicherheitsnetz gegen Endlosschleifen - Famulus bricht spätestens hier ab.
 max_turns = 101
 

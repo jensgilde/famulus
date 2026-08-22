@@ -18,6 +18,15 @@ pub struct Config {
     /// Hyper-Key nicht ausgerechnet in ANTHROPIC_API_KEY landen muss.
     #[serde(default)]
     pub api_key_env: Option<String>,
+    /// Ausweich-Provider, der Reihe nach versucht wird, wenn `provider`
+    /// fehlschlägt (Netzwerk, Rate-Limit, Timeout). Leer = kein Fallback,
+    /// exakt das heutige Verhalten: schlägt der Hauptprovider fehl, bricht
+    /// der Auftrag ab. Jeder Fallback benutzt die Standard-Adresse und den
+    /// Standard-Key seines Providers (kein eigenes `base_url`/`api_key_env`
+    /// pro Fallback - für den Fall, dass das mal noetig wird, ist das der
+    /// naheliegende naechste Ausbauschritt).
+    #[serde(default)]
+    pub fallback_providers: Vec<FallbackProvider>,
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
     /// Wie lang eine einzelne Modellantwort höchstens werden darf. Zu klein
@@ -45,6 +54,13 @@ pub struct Config {
     /// Nach jedem Auftrag einen Rückblick machen und Erkenntnisse merken.
     #[serde(default = "default_wahr")]
     pub reflexion: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FallbackProvider {
+    pub provider: String, // "hyper", "openrouter" oder "ollama"
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 fn default_antwort_tokens() -> u32 {

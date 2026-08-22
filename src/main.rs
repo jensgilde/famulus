@@ -7,7 +7,7 @@ use famulus_core::ui::{TerminalUi, Ui};
 use std::sync::Arc;
 
 /// Famulus - ein persönlicher KI-Agent mit vollem Rechnerzugriff und
-/// austauschbarem LLM-Backend (Charm Hyper, Anthropic Claude oder xAI Grok).
+/// austauschbarem LLM-Backend (Charm Hyper, OpenRouter oder lokal via Ollama).
 #[derive(Parser)]
 #[command(name = "famulus", version)]
 struct Cli {
@@ -33,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
     let provider = llm::build_provider(&config)?;
     let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
 
-    match agent.run_task(&[], &cli.task).await {
+    let ergebnis = agent.run_task(&[], &cli.task).await;
+    zeige_provider_statistik();
+
+    match ergebnis {
         Ok(()) => {
             println!("\n{}", "── Fertig ──".bold());
         }
@@ -44,4 +47,33 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Zeigt die Router-Scorecard, falls schon Daten da sind. Rein informativ -
+/// ein Fehler beim Lesen (z.B. Gedächtnis nicht verfügbar) bricht den
+/// Auftrag nicht ab, das ist ja schon durchgelaufen.
+fn zeige_provider_statistik() {
+    let Ok(gedaechtnis) = famulus_core::memory::Gedaechtnis::standard() else {
+        return;
+    };
+    let Ok(statistik) = gedaechtnis.provider_statistik() else {
+        return;
+    };
+    if statistik.is_empty() {
+        return;
+    }
+    println!("\n{}", "Provider-Statistik:".dimmed());
+    for s in statistik {
+        println!(
+            "  {}",
+            format!(
+                "{}: {} Aufrufe, {:.0}% erfolgreich, ⌀ {:.0}ms",
+                s.provider,
+                s.anzahl,
+                s.erfolgsquote * 100.0,
+                s.durchschnitt_ms
+            )
+            .dimmed()
+        );
+    }
 }

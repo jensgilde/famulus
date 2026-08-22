@@ -114,6 +114,7 @@ pub trait LlmProvider: Send + Sync {
 
 pub mod anthropic;
 pub mod openai;
+pub mod router;
 
 /// Liest einen API-Key aus der Umgebung. Eine gesetzte, aber leere Variable
 /// gilt dabei als fehlend - sonst schickt Famulus einen leeren Key los und
@@ -148,14 +149,19 @@ fn basis(base_url: Option<String>, standard: &str) -> String {
         .to_string()
 }
 
-pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn LlmProvider>> {
-    let timeout = Duration::from_secs(config.timeout_sekunden);
-    let max_tokens = config.max_antwort_tokens;
-    let modell = config.model.clone();
-    let basis_url = config.base_url.clone();
-    let key_var = config.api_key_env.clone();
-
-    match config.provider.as_str() {
+/// Baut einen einzelnen Provider. `base_url`/`key_var` gelten nur für den
+/// Hauptprovider aus der Config - Fallbacks rufen das mit `None` auf und
+/// bekommen damit die Standard-Adresse/den Standard-Key ihres Providers
+/// (siehe `Config::fallback_providers`-Doku für die Begründung).
+fn build_single_provider(
+    name: &str,
+    modell: Option<String>,
+    basis_url: Option<String>,
+    key_var: Option<String>,
+    max_tokens: u32,
+    timeout: Duration,
+) -> anyhow::Result<Box<dyn LlmProvider>> {
+    match name {
         // Charm Hyper spricht das Anthropic-Messages-Protokoll - deshalb
         // dieselbe Implementierung wie ein echter Anthropic-Zugang, nur mit
         // anderer Adresse, anderem Key und anderem Standardmodell. Genau
@@ -201,4 +207,40 @@ pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn 
             "Unbekannter Provider '{other}' in famulus.toml. Erlaubt: 'hyper', 'openrouter', 'ollama'."
         ),
     }
+}
+
+/// Baut den (oder die) konfigurierten Provider und verpackt sie in den
+/// Router. Ohne `fallback_providers` (der Normalfall) liegt genau ein
+/// Provider in der Liste - der Router versucht ihn einmal und reicht
+/// Erfolg oder Fehler direkt durch. Verhalten und Fehlerfälle sind dann
+/// identisch zu vorher, nur mit Scorecard-Eintrag nebenbei (siehe
+/// `router.rs`). Erst mit mindestens einem Fallback probiert der Router
+/// bei einem Fehlschlag den nächsten Provider, statt den Auftrag
+/// abzubrechen.
+pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn LlmProvider>> {
+    let timeout = Duration::from_secs(config.timeout_sekunden);
+    let max_tokens = config.max_antwort_tokens;
+
+    let haupt = build_single_provider(
+        &config.provider,
+        config.model.clone(),
+        config.base_url.clone(),
+        config.api_key_env.clone(),
+        max_tokens,
+        timeout,
+    )?;
+
+    let mut providers = vec![haupt];
+    for fallback in &config.fallback_providers {
+        providers.push(build_single_provider(
+            &fallback.provider,
+            fallback.model.clone(),
+            None,
+            None,
+            max_tokens,
+            timeout,
+        )?);
+    }
+
+    Ok(Box::new(router::RouterProvider::new(providers)))
 }
