@@ -697,6 +697,44 @@ fn sammle_markdown(wurzel: &Path, ordner: &Path, raus: &mut Vec<(String, String)
     Ok(())
 }
 
+/// Tägliche Selbstreflexion: aktualisiert das Selbstmodell und die
+/// Provider-Statistik. Wird von der GUI als Hintergrund-Task aufgerufen,
+/// alle 6 Stunden. Öffnet die DB bewusst frisch – kein Agent nötig.
+pub fn idle_reflexion() {
+    eprintln!("[idle] Selbstreflexion gestartet...");
+
+    let gedaechtnis = match crate::memory::Gedaechtnis::standard() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("[idle] Gedächtnis nicht verfügbar: {e:#}");
+            return;
+        }
+    };
+
+    // 1. Provider-Statistik lesen und als Notiz speichern.
+    if let Ok(statistik) = gedaechtnis.provider_statistik() {
+        if !statistik.is_empty() {
+            let mut notiz = String::from("Idle-Reflexion: Provider-Statistik:\n");
+            for s in &statistik {
+                notiz.push_str(&format!(
+                    "{}: {:.0}% Erfolg bei {} Aufrufen (\u{00d8} {:.0}ms)\n",
+                    s.provider, s.erfolgsquote * 100.0, s.anzahl, s.durchschnitt_ms
+                ));
+            }
+            let _ = gedaechtnis.notizbuch_schreiben(&notiz);
+        }
+    }
+
+    // 2. Gedächtnis-Statistik.
+    if let Ok(anzahl) = gedaechtnis.anzahl() {
+        let _ = gedaechtnis.notizbuch_schreiben(&format!(
+            "Idle-Reflexion: {} Erinnerungen im Gedächtnis.", anzahl
+        ));
+    }
+
+    eprintln!("[idle] Selbstreflexion abgeschlossen.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

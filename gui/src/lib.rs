@@ -595,6 +595,16 @@ pub fn run() {
                 tauri::async_runtime::spawn(async {
                     remote::server_starten().await;
                 });
+
+                // Idle-Loop: alle 6 Stunden eine Selbstreflexion durchführen.
+                tauri::async_runtime::spawn(async {
+                    loop {
+                        // 6 Stunden warten
+                        tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+                        eprintln!("[idle] 6-Stunden-Intervall erreicht, starte Reflexion...");
+                        famulus_core::memory::idle_reflexion();
+                    }
+                });
             }
             Ok(())
         })

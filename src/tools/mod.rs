@@ -19,6 +19,7 @@ pub mod fs;
 pub mod shell;
 pub mod vault;
 pub mod notizbuch;
+pub mod selbstmodell;
 
 /// Stellt die Werkzeuge zusammen, die dem Modell angeboten werden.
 ///

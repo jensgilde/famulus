@@ -22,6 +22,8 @@ pub struct Agent {
     max_erinnerungen: usize,
     reflexion: bool,
     hat_vault: bool,
+    /// Vault-Pfad für Selbstmodell und ToM
+    vault_pfad: Option<std::path::PathBuf>,
     /// Stufe 2: Embeddings sind verfügbar (Ollama läuft mit --embeddings).
     embeddings_aktiv: bool,
 }
@@ -96,6 +98,16 @@ impl Agent {
             }
         }
 
+        // ── Selbstmodell-Tool: schreibt Wer-ist-Famulus.md in den Vault ──
+        let vault_pfad = config.vault_pfad();
+        if let (Some(ref g), Some(ref vp)) = (&gedaechtnis, &vault_pfad) {
+            let selbstmodell = Box::new(crate::tools::selbstmodell::SelbstmodellTool {
+                gedaechtnis: Arc::clone(g),
+                vault_pfad: vp.clone(),
+            });
+            tools.insert(selbstmodell.definition().name.clone(), selbstmodell);
+        }
+
         Self {
             provider,
             tools,
@@ -106,6 +118,7 @@ impl Agent {
             max_erinnerungen: config.max_erinnerungen,
             reflexion: config.reflexion,
             hat_vault,
+            vault_pfad,
             embeddings_aktiv,
         }
     }
@@ -120,7 +133,52 @@ impl Agent {
             }
         }
 
-        // 2. Gedächtnis: semantische Suche (Stufe 2) oder FTS5 (Stufe 1).
+        // 2. Selbstbild: Wer-ist-Famulus.md aus dem Vault, falls vorhanden.
+        if let Some(ref vp) = self.vault_pfad {
+            let selbstbild_pfad = vp.join("Wer-ist-Famulus.md");
+            if let Ok(inhalt) = std::fs::read_to_string(&selbstbild_pfad) {
+                if !inhalt.is_empty() {
+                    teile.push(format!("Dein Selbstbild (aus dem Vault):\n{}", inhalt));
+                }
+            }
+        }
+
+        // 3. Metakognition: Provider-Statistik als Selbstkenntnis.
+        if let Some(ref g) = self.gedaechtnis {
+            if let Ok(statistik) = g.provider_statistik() {
+                if !statistik.is_empty() {
+                    let mut zeilen = vec!["Aktuelle Provider-Statistik (deine Selbstkenntnis):".to_string()];
+                    for s in &statistik {
+                        zeilen.push(format!(
+                            "  - {}: {:.0}% Erfolg bei {} Aufrufen, \u{00d8} {:.0}ms",
+                            s.provider, s.erfolgsquote * 100.0, s.anzahl, s.durchschnitt_ms
+                        ));
+                    }
+                    zeilen.push("Nutze diese Daten, um bei Unsicherheit den zuverlässigsten Provider zu wählen.".to_string());
+                    teile.push(zeilen.join("\n"));
+                }
+            }
+        }
+
+        // 4. Theory of Mind über Jens: was wissen wir über seinen aktuellen Zustand?
+        if let Some(ref g) = self.gedaechtnis {
+            if let Ok(treffer) = g.relevante("Jens Status Stimmung aktuell", 3) {
+                let jens_infos: Vec<String> = treffer.iter()
+                    .filter(|e| e.art == crate::memory::ART_PRAEFERENZ || e.art == crate::memory::ART_FAKT)
+                    .map(|e| format!("- {}", e.inhalt))
+                    .collect();
+                if !jens_infos.is_empty() {
+                    teile.push(format!(
+                        "Was du über Jens' aktuellen Zustand weißt:\n{}\n\n\
+                         Falls du dir bei etwas unsicher bist, frag Jens EINMAL pro Auftrag. \
+                         Aber nur dann, wenn es wirklich nötig ist – nicht öfter.",
+                        jens_infos.join("\n")
+                    ));
+                }
+            }
+        }
+
+        // 5. Gedächtnis: semantische Suche (Stufe 2) oder FTS5 (Stufe 1).
         if let Some(g) = &self.gedaechtnis {
             let erinnerungen = if self.embeddings_aktiv {
                 g.relevante_semantisch(auftrag, self.max_erinnerungen)
