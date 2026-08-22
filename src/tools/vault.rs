@@ -33,7 +33,7 @@ fn im_vault(wurzel: &Path, notiz: &str) -> anyhow::Result<PathBuf> {
     // Eine klare Absage bringt es dazu, es richtig zu machen.
     if notiz.starts_with('/') {
         anyhow::bail!(
-            "'{notiz}' ist ein absoluter Pfad. Erwartet wird ein Pfad relativ zur Vault-Wurzel, z.B. '01-About-Me/Vorlieben.md'."
+            "'{notiz}' ist ein absoluter Pfad. Erwartet wird ein Pfad relativ zur Vault-Wurzel, z.B. '01-Ueber-Jens/Vorlieben.md'."
         );
     }
     if Path::new(notiz)
@@ -88,7 +88,7 @@ impl Tool for VaultListeTool {
                 "properties": {
                     "ordner": {
                         "type": "string",
-                        "description": "Optionaler Unterordner, z.B. '01-About-Me'. Leer = ganzer Vault."
+                        "description": "Optionaler Unterordner, z.B. '01-Ueber-Jens'. Leer = ganzer Vault."
                     }
                 }
             }),
@@ -160,7 +160,7 @@ impl Tool for VaultLesenTool {
         ToolDefinition {
             name: "vault_lesen".to_string(),
             description: "Liest eine Notiz aus dem Obsidian-Vault. Pfad relativ zur Vault-Wurzel, \
-                          z.B. '01-About-Me/Vorlieben.md'."
+                          z.B. '01-Ueber-Jens/Vorlieben.md'."
                 .to_string(),
             parameters_schema: json!({
                 "type": "object",
@@ -204,7 +204,7 @@ impl Tool for VaultSchreibenTool {
             parameters_schema: json!({
                 "type": "object",
                 "properties": {
-                    "notiz":  { "type": "string", "description": "Pfad relativ zum Vault, z.B. '03-Projects/Famulus.md'" },
+                    "notiz":  { "type": "string", "description": "Pfad relativ zum Vault, z.B. '02-Projekte/Famulus.md'" },
                     "inhalt": { "type": "string", "description": "Der Text, der geschrieben wird (Markdown)" },
                     "ersetzen": {
                         "type": "boolean",
@@ -347,7 +347,7 @@ mod tests {
         }
 
         // Gegenprobe: normale Notizen gehen durch.
-        assert!(im_vault(&wurzel, "01-About-Me/Vorlieben.md").is_ok());
+        assert!(im_vault(&wurzel, "01-Ueber-Jens/Vorlieben.md").is_ok());
         assert!(im_vault(&wurzel, "00-Inbox/Neu").is_ok());
 
         std::fs::remove_dir_all(&wurzel).ok();
