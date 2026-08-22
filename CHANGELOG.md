@@ -5,6 +5,35 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] – 2026-08-22
+
+### Hinzugefügt
+- **Selbstmodell-Tool** (`src/tools/selbstmodell.rs`): schreibt
+  `Wer-ist-Famulus.md` in den Vault - Fähigkeiten, Geschichte (aus
+  CHANGELOG.md), Selbstkenntnis (Scorecard, Erinnerungszahl), Grenzen.
+  Fließt über `systemvorspann()` als Selbstbild in jeden Auftrag ein.
+- **Idle-Loop**: alle 6 Stunden, nur während die GUI läuft (kein
+  Hintergrund-Daemon, stirbt mit dem Prozess). Bewusst konservativ:
+  kein LLM-Aufruf, nur ein DB-Statistik-Schnappschuss ins Notizbuch -
+  keine laufenden Kosten, kein Konflikt mit dem Ein-Task-Slot der GUI.
+- **`max_turns = 997`** in `~/.famulus/famulus.toml` (war 101).
+
+### Behoben
+- ToM-Textbaustein in `agent.rs` hatte massives Leerzeichen-Wirrwarr im
+  Prompt-String - unnötige Tokens bei jedem Auftrag.
+- Ungenutzte `chrono`-Abhängigkeit entfernt (nirgends importiert).
+- Zwei beim Anfügen von `selbstmodell` versehentlich gelöschte
+  Doc-Kommentare in `tools/mod.rs` wiederhergestellt.
+- Absturz (`SIGKILL Code Signature Invalid`) durch Rebuild während der
+  Entwicklung dieser Features - kein Zusammenhang mit `max_turns`
+  selbst. Frischer Build + atomarer Install (siehe 0.6.2-Fix) hat es
+  behoben.
+
+### Versions-Nachtrag
+- Die vorherigen zwei Commits ("v0.7.1") hatten die Versionsnummer nie
+  tatsächlich auf 0.7.1 gesetzt - direkt auf 0.7.2 gesprungen, um keine
+  doppelt vergebene Version zu erzeugen.
+
 ## [0.7.0] – 2026-08-22
 
 ### Hinzugefügt
