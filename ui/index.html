@@ -1166,6 +1166,7 @@ function renderModelle() {
       zustandEl.textContent = z;
       document.getElementById('modelTrigger').textContent = 'Automatisch';
       renderModelle();
+      ladeCredits();
     } catch (e) {
       zeigeFehlerBanner('Automatische Modellwahl fehlgeschlagen: ' + e);
     }
