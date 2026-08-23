@@ -5,6 +5,37 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] – 2026-08-23
+
+### Hinzugefügt
+- **Sprachausgabe & -erkennung (TTS + STT)** in der GUI (macOS
+  Speech-Framework); Mikrofon- und Spracherkennungs-Berechtigung
+  werden vom Install-Skript in die Info.plist gepatcht.
+- **Zwischenfragen** während eines laufenden Auftrags: Senden wird
+  zum Zwischenfrage-Button, Abbrechen hat einen eigenen Button.
+- **Datum/Uhrzeit** neben den Rollen-Labels (Du/Famulus/Fehler) im Chat.
+- **iPad/iPhone-Install-Skript** (`scripts/install-ios.sh`), wird vom
+  Mac-Install automatisch mitgezogen.
+- **Echte Löschen-/Archivieren-Buttons** pro Chat-Zeile: 🗄 archiviert
+  reversibel, ✕ löscht endgültig mit Bestätigungsdialog.
+
+### Behoben
+- **Chat-Löschen per ✕ wirkungslos** auf macOS: `window.confirm()` wird
+  von WKWebView ohne Dialog still mit `false` beantwortet (kein
+  `runJavaScriptConfirmPanel` im UI-Delegate von wry). Ersatz durch
+  einen eigenen Bestätigungsdialog (`frageBestaetigung()`), auch für
+  das Preset-Löschen.
+- Löschen des letzten Chats ließ `renderMessages()` an `chats[0] is
+  undefined` sterben – es wird jetzt automatisch ein neuer Chat
+  angelegt.
+- Veralteter Tailscale-Hostname blockierte jede iPad/iPhone-Fernbedienung.
+- Doppeltes „Archiv“-Sidebar-Header-Div entfernt.
+
+### Geändert
+- Regelbasierte automatische Modellwahl; Credits-Anzeige beim
+  Umschalten auf die automatische Modellwahl korrigiert.
+
+
 ## [0.7.2] – 2026-08-22
 
 ### Hinzugefügt

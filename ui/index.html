@@ -360,6 +360,36 @@
     border-radius: var(--radius-lg); background: rgba(0,0,0,0.8);
   }
 
+  /* Eigener Bestätigungsdialog: WKWebView (macOS) implementiert
+     `runJavaScriptConfirmPanel` nicht, deshalb liefert das eingebaute
+     window.confirm() dort still `false` zurück - Löschen passierte nie.
+     Siehe wry 0.55.1, wry_web_view_ui_delegate.rs (nur OpenPanel und
+     MediaCapture sind implementiert). */
+  .confirm-overlay {
+    display: none; position: fixed; inset: 0; z-index: 500;
+    background: rgba(0,0,0,0.7); align-items: center; justify-content: center;
+  }
+  .confirm-overlay.open { display: flex; }
+  .confirm-box {
+    background: var(--bg-tertiary); border: 1px solid var(--border-hover);
+    border-radius: var(--radius-lg); padding: 20px 22px 16px;
+    max-width: 380px; min-width: 280px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  }
+  .confirm-text {
+    font-size: 13px; color: var(--text-primary);
+    line-height: 1.5; margin-bottom: 18px; word-break: break-word;
+  }
+  .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .confirm-actions button {
+    background: none; border: 1px solid var(--border); color: var(--text-secondary);
+    padding: 6px 14px; border-radius: var(--radius); font-size: 12px;
+    cursor: pointer; font-family: inherit;
+  }
+  .confirm-actions button:hover { border-color: var(--border-hover); color: var(--text-primary); }
+  .confirm-actions button.danger { border-color: rgba(255,68,68,0.35); color: var(--danger); }
+  .confirm-actions button.danger:hover { background: rgba(255,68,68,0.12); border-color: var(--danger); }
+
   .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--text-faint); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; margin-right: 4px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -372,6 +402,16 @@
 <body>
 
 <div class="drop-overlay" id="dropOverlay"><div class="drop-hint">📎 Loslassen zum Hochladen</div></div>
+
+<div class="confirm-overlay" id="confirmOverlay">
+  <div class="confirm-box">
+    <div class="confirm-text" id="confirmText"></div>
+    <div class="confirm-actions">
+      <button id="confirmAbbrechen">Abbrechen</button>
+      <button id="confirmOk" class="danger">Löschen</button>
+    </div>
+  </div>
+</div>
 
 <div id="app">
   <div class="toolbar">
@@ -543,7 +583,7 @@ async function presetsSpeichern() {
 async function presetsLoeschen() {
   const name = aktivesPreset;
   if (!name || presetsData.presets.length <= 1) return;
-  if (!confirm("Preset „" + name + " wirklich löschen?")) return;
+  if (!await frageBestaetigung("Preset „" + name + "“ wirklich löschen?")) return;
   try {
     presetsData = await invoke(presetCommand("presets_loeschen"), { name });
     aktivesPreset = presetsData.active;
@@ -981,9 +1021,9 @@ function renderConversationList() {
     del.className = 'conv-delete';
     del.textContent = '✕';
     del.title = 'Löschen';
-    del.addEventListener('click', e => {
+    del.addEventListener('click', async e => {
       e.stopPropagation();
-      if (confirm(`"${c.titel || 'Neuer Chat'}" endgültig löschen?`)) chatLoeschen(c.id);
+      if (await frageBestaetigung(`"${c.titel || 'Neuer Chat'}" endgültig löschen?`)) chatLoeschen(c.id);
     });
     aktionen.appendChild(del);
 
@@ -1021,9 +1061,9 @@ function renderArchivedList() {
     del.className = 'conv-delete';
     del.textContent = '✕';
     del.title = 'Endgültig löschen';
-    del.addEventListener('click', e => {
+    del.addEventListener('click', async e => {
       e.stopPropagation();
-      if (confirm(`"${c.titel || 'Chat'}" endgültig löschen?`)) chatLoeschen(c.id);
+      if (await frageBestaetigung(`"${c.titel || 'Chat'}" endgültig löschen?`)) chatLoeschen(c.id);
     });
     aktionen.appendChild(del);
 
@@ -1055,6 +1095,46 @@ function beschaeftigt(b) {
   senden.title = b ? 'Zwischenfrage senden' : 'Senden';
   stoppBtn.style.display = b ? '' : 'none';
   renderStatusbar();
+}
+
+/// Ersatz für window.confirm(), das in WKWebView auf macOS wirkungslos ist
+/// (kein `runJavaScriptConfirmPanel` im UI-Delegate von wry - der Aufruf
+/// liefert sofort `false`, ohne dass ein Fenster erscheint). Gibt ein
+/// Promise<boolean> zurück; Enter = bestätigen, Escape/Klick daneben = nein.
+function frageBestaetigung(text, okText) {
+  const overlay = document.getElementById('confirmOverlay');
+  const textEl = document.getElementById('confirmText');
+  const okBtn = document.getElementById('confirmOk');
+  const abbrBtn = document.getElementById('confirmAbbrechen');
+  textEl.textContent = text;
+  okBtn.textContent = okText || 'Löschen';
+  overlay.classList.add('open');
+  okBtn.focus();
+
+  return new Promise(resolve => {
+    // Ein einziger Aufräumpfad für alle Wege, den Dialog zu verlassen -
+    // sonst blieben Listener liegen und der zweite Aufruf würde doppelt
+    // auflösen.
+    const fertig = (antwort) => {
+      overlay.classList.remove('open');
+      okBtn.removeEventListener('click', aufOk);
+      abbrBtn.removeEventListener('click', aufAbbruch);
+      overlay.removeEventListener('click', aufHintergrund);
+      document.removeEventListener('keydown', aufTaste);
+      resolve(antwort);
+    };
+    const aufOk = () => fertig(true);
+    const aufAbbruch = () => fertig(false);
+    const aufHintergrund = (e) => { if (e.target === overlay) fertig(false); };
+    const aufTaste = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); fertig(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); fertig(true); }
+    };
+    okBtn.addEventListener('click', aufOk);
+    abbrBtn.addEventListener('click', aufAbbruch);
+    overlay.addEventListener('click', aufHintergrund);
+    document.addEventListener('keydown', aufTaste);
+  });
 }
 
 function zeigeFehlerBanner(msg) {
@@ -1115,7 +1195,17 @@ async function chatLoeschen(id) {
   }
   chats = chats.filter(c => c.id !== id);
   archivedChats = archivedChats.filter(c => c.id !== id);
-  if (aktiverChatId === id && chats.length > 0) aktiverChatId = chats[0].id;
+  // War das der letzte Chat, muss ein neuer her - sonst greift
+  // aktiverChat() auf chats[0] zu, das es nicht mehr gibt, und
+  // renderMessages() stirbt an "chats[0] is undefined" (gleiche Logik
+  // wie in chatArchivieren()).
+  if (chats.length === 0) {
+    const neueId = 'c' + Date.now();
+    chats.push({ id: neueId, titel: 'Neuer Chat', nachrichten: [], createdAt: Date.now() });
+    aktiverChatId = neueId;
+  } else if (aktiverChatId === id) {
+    aktiverChatId = chats[0].id;
+  }
   await speichereChats();
   renderAlles();
 }
