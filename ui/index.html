@@ -180,6 +180,15 @@
   .conversation-item:hover .conv-restore { opacity: 1; }
   .conv-restore:hover { color: var(--success); background: rgba(0,204,102,0.12); }
 
+  .conv-actions { display: flex; gap: 2px; flex-shrink: 0; }
+  .conv-archive {
+    background: none; border: none; color: var(--text-faint);
+    cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px;
+    flex-shrink: 0; opacity: 0; transition: opacity .12s;
+  }
+  .conversation-item:hover .conv-archive { opacity: 1; }
+  .conv-archive:hover { color: var(--accent); background: var(--accent-muted); }
+
   /* ---- Chat Area ---- */
   .chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 
@@ -930,11 +939,28 @@ function renderConversationList() {
     const div = document.createElement('div');
     div.className = 'conversation-item' + (c.id === aktiverChatId ? ' active' : '');
     div.innerHTML = `<div class="conv-info"><div class="conv-title">${c.titel || 'Neuer Chat'}</div><div class="conv-meta">${c.nachrichten.length} Nachrichten</div></div>`;
+
+    const aktionen = document.createElement('div');
+    aktionen.className = 'conv-actions';
+
+    const archiv = document.createElement('button');
+    archiv.className = 'conv-archive';
+    archiv.textContent = '🗄';
+    archiv.title = 'Archivieren';
+    archiv.addEventListener('click', e => { e.stopPropagation(); chatArchivieren(c.id); });
+    aktionen.appendChild(archiv);
+
     const del = document.createElement('button');
     del.className = 'conv-delete';
     del.textContent = '✕';
-    del.addEventListener('click', e => { e.stopPropagation(); chatArchivieren(c.id); });
-    div.appendChild(del);
+    del.title = 'Löschen';
+    del.addEventListener('click', e => {
+      e.stopPropagation();
+      if (confirm(`"${c.titel || 'Neuer Chat'}" endgültig löschen?`)) chatLoeschen(c.id);
+    });
+    aktionen.appendChild(del);
+
+    div.appendChild(aktionen);
     div.addEventListener('click', () => chatWechseln(c.id));
     conversationList.appendChild(div);
   });
@@ -953,12 +979,28 @@ function renderArchivedList() {
     const div = document.createElement('div');
     div.className = 'conversation-item';
     div.innerHTML = `<div class="conv-info"><div class="conv-title">${c.titel || 'Chat'}</div><div class="conv-meta">${c.nachrichten.length} Nachrichten</div></div>`;
+
+    const aktionen = document.createElement('div');
+    aktionen.className = 'conv-actions';
+
     const restore = document.createElement('button');
     restore.className = 'conv-restore';
     restore.textContent = '↩';
     restore.title = 'Wiederherstellen';
     restore.addEventListener('click', e => { e.stopPropagation(); chatWiederherstellen(c.id); });
-    div.appendChild(restore);
+    aktionen.appendChild(restore);
+
+    const del = document.createElement('button');
+    del.className = 'conv-delete';
+    del.textContent = '✕';
+    del.title = 'Endgültig löschen';
+    del.addEventListener('click', e => {
+      e.stopPropagation();
+      if (confirm(`"${c.titel || 'Chat'}" endgültig löschen?`)) chatLoeschen(c.id);
+    });
+    aktionen.appendChild(del);
+
+    div.appendChild(aktionen);
     div.addEventListener('click', () => {
       // Bei Klick auf archivierten Chat: wiederherstellen und wechseln
       chatWiederherstellen(c.id);
