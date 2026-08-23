@@ -207,6 +207,10 @@
   .msg.user .msg-role { color: var(--accent); }
   .msg.assistant .msg-role { color: var(--text-muted); }
   .msg.fehler .msg-role { color: var(--danger); }
+  .msg-zeit {
+    font-size: 10px; font-weight: 400; letter-spacing: normal;
+    text-transform: none; color: var(--text-faint); margin-left: 6px;
+  }
 
   .msg-bubble {
     display: inline-block; max-width: 85%; text-align: left;
@@ -778,6 +782,20 @@ dateiEingabe.addEventListener('change', async () => {
 });
 
 // ── Formatierung ─────────────────────────────────────────────────────────
+/// Datum/Uhrzeit klein neben "Du"/"Famulus". `ts` fehlt bei Nachrichten aus
+/// der Zeit vor diesem Feature (alte Chats) - dann einfach nichts anzeigen,
+/// statt ein falsches "jetzt" zu erfinden.
+function formatZeit(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const heute = new Date();
+  const selberTag = d.toDateString() === heute.toDateString();
+  const uhrzeit = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  if (selberTag) return uhrzeit;
+  const datum = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return `${datum} ${uhrzeit}`;
+}
+
 function formatText(text) {
   if (!text) return '';
   let escaped = text
@@ -822,7 +840,7 @@ function renderMessages() {
     if (m.rolle === 'user') {
       const roleEl = document.createElement('div');
       roleEl.className = 'msg-role';
-      roleEl.textContent = 'Du';
+      roleEl.innerHTML = `Du<span class="msg-zeit">${formatZeit(m.zeitstempel)}</span>`;
       div.appendChild(roleEl);
       const bubble = document.createElement('div');
       bubble.className = 'msg-bubble';
@@ -846,7 +864,7 @@ function renderMessages() {
     } else if (m.rolle === 'assistant') {
       const roleEl = document.createElement('div');
       roleEl.className = 'msg-role';
-      roleEl.textContent = 'Famulus';
+      roleEl.innerHTML = `Famulus<span class="msg-zeit">${formatZeit(m.zeitstempel)}</span>`;
       div.appendChild(roleEl);
       const bubble = document.createElement('div');
       bubble.className = 'msg-bubble';
@@ -855,7 +873,7 @@ function renderMessages() {
     } else if (m.rolle === 'fehler') {
       const roleEl = document.createElement('div');
       roleEl.className = 'msg-role';
-      roleEl.textContent = 'Fehler';
+      roleEl.innerHTML = `Fehler<span class="msg-zeit">${formatZeit(m.zeitstempel)}</span>`;
       div.appendChild(roleEl);
       const bubble = document.createElement('div');
       bubble.className = 'msg-bubble';
@@ -1316,6 +1334,7 @@ async function los() {
     rolle: 'user',
     inhalt: text || '(Bild)',
     anhaenge: aktuelleAnhaenge.map(a => ({ name: a.name, medien_typ: a.medien_typ, base64: a.base64 })),
+    zeitstempel: Date.now(),
   });
   speichereChats();
 
@@ -1337,7 +1356,7 @@ async function los() {
     const fn = istIOS ? 'remote_auftrag' : 'starte_auftrag';
     await invoke(fn, { auftrag: text || 'Beschreibe dieses Bild.', verlauf });
   } catch (e) {
-    chat.nachrichten.push({ rolle: 'fehler', inhalt: String(e) });
+    chat.nachrichten.push({ rolle: 'fehler', inhalt: String(e), zeitstempel: Date.now() });
     speichereChats();
     beschaeftigt(false);
     renderAlles();
@@ -1356,7 +1375,7 @@ async function sendeZwischenfrage() {
   if (!text) return;
 
   const chat = aktiverChat();
-  chat.nachrichten.push({ rolle: 'user', inhalt: text });
+  chat.nachrichten.push({ rolle: 'user', inhalt: text, zeitstempel: Date.now() });
   speichereChats();
 
   eingabe.value = '';
@@ -1535,7 +1554,7 @@ listen('famulus-ereignis', e => {
       zustandEl.title = ev.grund;
       break;
     case 'fertig':
-      chat.nachrichten.push({ rolle: 'assistant', inhalt: aktuellerDenktText || ev.chunk || '' });
+      chat.nachrichten.push({ rolle: 'assistant', inhalt: aktuellerDenktText || ev.chunk || '', zeitstempel: Date.now() });
       speichereChats();
       aktuellerAgentSchritte = [];
       aktuellerDenktText = '';
@@ -1544,7 +1563,7 @@ listen('famulus-ereignis', e => {
       ladeCredits();
       break;
     case 'abgebrochen':
-      chat.nachrichten.push({ rolle: 'fehler', inhalt: ev.fehler });
+      chat.nachrichten.push({ rolle: 'fehler', inhalt: ev.fehler, zeitstempel: Date.now() });
       speichereChats();
       aktuellerAgentSchritte = [];
       aktuellerDenktText = '';
