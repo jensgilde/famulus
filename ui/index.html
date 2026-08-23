@@ -300,7 +300,15 @@
   }
   #senden:hover { background: var(--accent-hover); }
   #senden:active { transform: scale(0.95); }
-  #senden.stopp { background: var(--danger); color: #fff; }
+
+  #stoppBtn {
+    background: none; border: 1px solid var(--border);
+    color: var(--text-muted); width: 36px; height: 36px;
+    border-radius: 50%; cursor: pointer; font-size: 14px;
+    transition: all .15s; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #stoppBtn:hover { border-color: var(--danger); color: var(--danger); }
   .mic-btn, .speak-btn {
     background: none; border: 1px solid var(--border);
     color: var(--text-muted); width: 36px; height: 36px;
@@ -395,6 +403,7 @@
           <button class="mic-btn" id="micBtn" title="Spracheingabe (ohne Enter)">🎤</button>
           <button class="upload-btn" id="uploadBtn" title="Bild anhängen (auch: Strg+V oder Drag & Drop)">📎</button>
           <textarea id="eingabe" placeholder="Schreib Famulus einen Auftrag…" rows="1"></textarea>
+          <button id="stoppBtn" title="Auftrag abbrechen" style="display:none">✕</button>
           <button id="senden">↑</button>
         </div>
       </div>
@@ -456,6 +465,7 @@ let anhaenge = []; // { name, medien_typ, base64, dataUrl }
 const messagesEl = document.getElementById('messages');
 const eingabe = document.getElementById('eingabe');
 const senden = document.getElementById('senden');
+const stoppBtn = document.getElementById('stoppBtn');
 const statusEl = document.getElementById('status');
 const zustandEl = document.getElementById('zustand');
 const creditsEl = document.getElementById('credits');
@@ -1019,9 +1029,13 @@ function renderStatusbar() {
 
 function beschaeftigt(b) {
   laeuft = b;
-  senden.className = b ? 'stopp' : '';
-  senden.textContent = b ? '■' : '↑';
-  eingabe.disabled = b;
+  // Eingabefeld bleibt während der Arbeit aktiv - sonst könnte man keine
+  // Zwischenfrage tippen. Senden schickt während der Arbeit eine
+  // Zwischenfrage statt eines neuen Auftrags; Abbrechen sitzt auf einem
+  // eigenen Button, damit beides nebeneinander verfügbar ist.
+  eingabe.disabled = false;
+  senden.title = b ? 'Zwischenfrage senden' : 'Senden';
+  stoppBtn.style.display = b ? '' : 'none';
   renderStatusbar();
 }
 
@@ -1331,6 +1345,31 @@ async function los() {
   }
 }
 
+/// Schickt eine Nachricht, während Famulus schon an etwas anderem arbeitet
+/// - anders als los() wird dafür KEIN neuer Auftrag gestartet. Der Text
+/// landet nur als Nachricht in der Anzeige und im laufenden Zug (siehe
+/// agent.rs::run_task) - Famulus bekommt ihn vor der nächsten Antwort zu
+/// sehen und kann ihn beiläufig mitbeantworten, ohne die eigentliche
+/// Arbeit abzubrechen.
+async function sendeZwischenfrage() {
+  const text = eingabe.value.trim();
+  if (!text) return;
+
+  const chat = aktiverChat();
+  chat.nachrichten.push({ rolle: 'user', inhalt: text });
+  speichereChats();
+
+  eingabe.value = '';
+  eingabe.style.height = 'auto';
+  renderMessages();
+
+  try {
+    const fn = istIOS ? 'remote_zwischenfrage' : 'zwischenfrage';
+    await invoke(fn, { text });
+  } catch (e) {
+    zeigeFehlerBanner('Zwischenfrage konnte nicht gesendet werden: ' + e);
+  }
+}
 
 // ── STT: Spracheingabe ─────────────────────────────────────────────────────
 let speechRecognition = null;
@@ -1423,16 +1462,18 @@ function haengeTtsButtons() {
   });
 }
 
-senden.addEventListener
-('click', () => {
+senden.addEventListener('click', () => {
   if (laeuft) {
-    invoke('stoppe_auftrag').catch(() => {});
+    sendeZwischenfrage();
   } else {
     los();
   }
 });
+stoppBtn.addEventListener('click', () => {
+  invoke('stoppe_auftrag').catch(() => {});
+});
 eingabe.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey && !laeuft) { e.preventDefault(); los(); }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); laeuft ? sendeZwischenfrage() : los(); }
 });
 eingabe.addEventListener('input', () => {
   eingabe.style.height = 'auto';

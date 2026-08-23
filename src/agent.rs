@@ -328,6 +328,7 @@ impl Agent {
         &self,
         vorherige_nachrichten: &[Message],
         auftrag: &str,
+        mut zwischenfragen: tokio::sync::mpsc::UnboundedReceiver<String>,
     ) -> anyhow::Result<()> {
         let system = self.systemvorspann(auftrag).await;
 
@@ -384,6 +385,18 @@ impl Agent {
             // Schleife nicht, um das Provider-Kontextlimit über einen
             // langen Auftrag hinweg einzuhalten.
             nachrichten_kuerzen(&mut nachrichten);
+
+            // Zwischenfragen einspeisen: kann eine laufende Modellanfrage
+            // nicht unterbrechen (die ist schon unterwegs), deshalb hier -
+            // am Rundenanfang, bevor die nächste Anfrage rausgeht. Alles,
+            // was seit der letzten Runde eingegangen ist, auf einmal
+            // mitnehmen, nicht nur die neueste.
+            while let Ok(text) = zwischenfragen.try_recv() {
+                nachrichten.push(Message::User(format!(
+                    "[Zwischenfrage von Jens, während du am eigentlichen Auftrag arbeitest - \
+                     beantworte sie kurz nebenbei, dann mach mit dem Auftrag weiter]: {text}"
+                )));
+            }
 
             let antwort = provider
                 .next(system.as_deref(), &nachrichten, &tool_defs)

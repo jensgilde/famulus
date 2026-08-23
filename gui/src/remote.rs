@@ -37,6 +37,10 @@ enum RemoteRequest {
     SetzeModell { provider: String, model: String },
     #[serde(rename = "setze_modell_modus")]
     SetzeModellModus { modus: String },
+    /// Schickt eine Zwischenfrage an den gerade auf dem Mac laufenden
+    /// Auftrag, ohne ihn abzubrechen - siehe LAUFENDE_ZWISCHENFRAGE.
+    #[serde(rename = "zwischenfrage")]
+    Zwischenfrage { text: String },
     #[serde(rename = "version")]
     Version,
     #[serde(rename = "presets_liste")]
@@ -77,6 +81,8 @@ enum RemoteResponse {
     Version { version: String },
     #[serde(rename = "presets")]
     Presets { presets: serde_json::Value },
+    #[serde(rename = "ok")]
+    Ok,
     #[serde(rename = "error")]
     Error { fehler: String },
 }
@@ -95,6 +101,13 @@ use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 /// Ereignis-Weiterleitung zum anfragenden Gerät kappen (siehe Kommentar bei
 /// RemoteRequest::Abbrechen).
 static LAUFENDER_SERVER_AUFTRAG: LazyLock<StdMutex<Option<tokio::task::JoinHandle<()>>>> =
+    LazyLock::new(|| StdMutex::new(None));
+
+/// Sendehälfte für Zwischenfragen an den gerade laufenden Server-Auftrag -
+/// Gegenstück zu ZwischenfrageKanal in lib.rs für den iPad-Pfad. `None`
+/// heißt: kein Auftrag läuft, eine Zwischenfrage hätte niemanden, der sie
+/// abholt.
+static LAUFENDE_ZWISCHENFRAGE: LazyLock<StdMutex<Option<mpsc::UnboundedSender<String>>>> =
     LazyLock::new(|| StdMutex::new(None));
 
 /// Typ-Alias für die Schreibhälfte einer WebSocket-Verbindung.
@@ -284,6 +297,9 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                         }
                     });
 
+                    let (zf_tx, zf_rx) = mpsc::unbounded_channel();
+                    *LAUFENDE_ZWISCHENFRAGE.lock().unwrap() = Some(zf_tx);
+
                     let handle = tokio::spawn(async move {
                         let ui: Arc<dyn Ui> = Arc::new(RemoteUi { tx: event_tx.clone() });
 
@@ -296,7 +312,7 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                         match vorbereitung {
                             Ok((config, provider)) => {
                                 let agent = Agent::new(config, provider, ui).await;
-                                if let Err(e) = agent.run_task(&verlauf, &auftrag).await {
+                                if let Err(e) = agent.run_task(&verlauf, &auftrag, zf_rx).await {
                                     let _ = event_tx.send(AgentEvent::Abgebrochen {
                                         fehler: format!("{e:#}"),
                                     });
@@ -315,6 +331,19 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                 RemoteRequest::Abbrechen => {
                     if let Some(handle) = LAUFENDER_SERVER_AUFTRAG.lock().unwrap().take() {
                         handle.abort();
+                    }
+                }
+                RemoteRequest::Zwischenfrage { text } => {
+                    let gesendet = LAUFENDE_ZWISCHENFRAGE
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(|zf_tx| zf_tx.send(text).is_ok())
+                        .unwrap_or(false);
+                    if gesendet {
+                        let _ = send_response(&tx, &RemoteResponse::Ok).await;
+                    } else {
+                        let _ = send_error(&tx, "Kein Auftrag läuft gerade.").await;
                     }
                 }
             }
@@ -786,6 +815,38 @@ pub async fn client_modelle(server_ip: &str, provider: &str) -> Result<serde_jso
 }
 
 /// Setzt das Modell auf dem Mac.
+/// Schickt eine Zwischenfrage an den gerade auf dem Mac laufenden Auftrag,
+/// ohne ihn abzubrechen.
+pub async fn client_zwischenfrage(server_ip: &str, text: &str) -> Result<(), String> {
+    let url = format!("ws://{server_ip}:{SERVER_PORT}");
+
+    let (ws, _) = tokio::time::timeout(VERBINDUNGS_TIMEOUT, tokio_tungstenite::connect_async(&url))
+        .await
+        .map_err(|_| format!("Zeitüberschreitung: Keine Verbindung zu {url}."))?
+        .map_err(|e| format!("Keine Verbindung: {e}"))?;
+
+    let (mut tx, mut rx) = ws.split();
+
+    let request = RemoteRequest::Zwischenfrage { text: text.to_string() };
+    let json = serde_json::to_string(&request).map_err(|e| format!("JSON-Fehler: {e}"))?;
+    tx.send(WsMsg::Text(json.into()))
+        .await
+        .map_err(|e| format!("Sende-Fehler: {e}"))?;
+
+    if let Some(msg) = rx.next().await {
+        let msg = msg.map_err(|e| format!("Empfangs-Fehler: {e}"))?;
+        if let WsMsg::Text(text) = msg {
+            match serde_json::from_str::<RemoteResponse>(&text) {
+                Ok(RemoteResponse::Ok) => return Ok(()),
+                Ok(RemoteResponse::Error { fehler }) => return Err(fehler),
+                _ => return Err("Unerwartete Antwort vom Server".to_string()),
+            }
+        }
+    }
+
+    Err("Keine Antwort vom Server".to_string())
+}
+
 pub async fn client_setze_modell(server_ip: &str, provider: &str, model: &str) -> Result<String, String> {
     let url = format!("ws://{server_ip}:{SERVER_PORT}");
 

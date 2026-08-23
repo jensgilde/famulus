@@ -19,6 +19,12 @@ static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 /// zweiten zu, solange der erste läuft.
 struct LaufenderAuftrag(Mutex<Option<tauri::async_runtime::JoinHandle<()>>>);
 
+/// Sendehälfte für Zwischenfragen an den gerade laufenden Auftrag - siehe
+/// `zwischenfrage`-Command unten und `agent.rs::run_task`. `None` heißt:
+/// kein Auftrag läuft gerade, eine Zwischenfrage hätte niemanden, der sie
+/// abholt.
+struct ZwischenfrageKanal(Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>);
+
 struct TauriUi {
     app: AppHandle,
 }
@@ -102,10 +108,14 @@ fn starte_auftrag(
     verlauf: Vec<VerlaufEintrag>,
     app: AppHandle,
     laufender: State<'_, LaufenderAuftrag>,
+    zwischenfrage: State<'_, ZwischenfrageKanal>,
 ) {
     if let Some(alt) = laufender.0.lock().unwrap().take() {
         alt.abort();
     }
+
+    let (zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
+    *zwischenfrage.0.lock().unwrap() = Some(zf_tx);
 
     let handle = tauri::async_runtime::spawn(async move {
         let ui: Arc<dyn Ui> = Arc::new(TauriUi { app: app.clone() });
@@ -120,7 +130,7 @@ fn starte_auftrag(
         match vorbereitung {
             Ok((config, provider)) => {
                 let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
-                if let Err(e) = agent.run_task(&vorherige_nachrichten, &auftrag).await {
+                if let Err(e) = agent.run_task(&vorherige_nachrichten, &auftrag, zf_rx).await {
                     ui.ereignis(AgentEvent::Abgebrochen {
                         fehler: format!("{e:#}"),
                     });
@@ -133,6 +143,18 @@ fn starte_auftrag(
     });
 
     *laufender.0.lock().unwrap() = Some(handle);
+}
+
+/// Schickt eine Zwischenfrage an den gerade laufenden Auftrag, ohne ihn
+/// abzubrechen - siehe `ZwischenfrageKanal` und `agent.rs::run_task`.
+#[tauri::command]
+fn zwischenfrage(text: String, zwischenfrage: State<'_, ZwischenfrageKanal>) -> Result<(), String> {
+    match zwischenfrage.0.lock().unwrap().as_ref() {
+        Some(tx) => tx
+            .send(text)
+            .map_err(|_| "Kein Auftrag läuft gerade.".to_string()),
+        None => Err("Kein Auftrag läuft gerade.".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -491,6 +513,11 @@ async fn remote_setze_modell_modus(modus: String) -> Result<String, String> {
     remote::client_setze_modell_modus(&remote::mac_tailscale_ip().await, &modus).await
 }
 
+#[tauri::command]
+async fn remote_zwischenfrage(text: String) -> Result<(), String> {
+    remote::client_zwischenfrage(&remote::mac_tailscale_ip().await, &text).await
+}
+
 // ── Presets ───────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -678,6 +705,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(LaufenderAuftrag(Mutex::new(None)))
+        .manage(ZwischenfrageKanal(Mutex::new(None)))
         .setup(|_app| {
             #[cfg(not(target_os = "ios"))]
             {
@@ -707,12 +735,14 @@ pub fn run() {
             modelle_liste,
             setze_modell,
             setze_modell_modus,
+            zwischenfrage,
             remote_auftrag,
             remote_zustand,
             remote_credits,
             remote_modelle_liste,
             remote_setze_modell,
             remote_setze_modell_modus,
+            remote_zwischenfrage,
             presets_liste,
             presets_aktivieren,
             presets_speichern,

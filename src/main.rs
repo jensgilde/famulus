@@ -33,7 +33,12 @@ async fn main() -> anyhow::Result<()> {
     let provider = llm::build_provider(&config)?;
     let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
 
-    let ergebnis = agent.run_task(&[], &cli.task).await;
+    // Die CLI ist Einzelauftrag-Batch, kein interaktives Gespräch nebenher -
+    // niemand sendet hier Zwischenfragen. Sender sofort fallen lassen statt
+    // offenzuhalten: ein leerer, geschlossener Kanal macht try_recv() in
+    // run_task() zu einem reinen No-Op.
+    let (_zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
+    let ergebnis = agent.run_task(&[], &cli.task, zf_rx).await;
     zeige_provider_statistik();
 
     match ergebnis {
