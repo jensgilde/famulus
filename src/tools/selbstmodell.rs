@@ -188,8 +188,16 @@ impl SelbstmodellTool {
                         aktuelle.push_str(zeile);
                     }
                 }
-                // Nur die letzten 6 Versionen nehmen, sonst wird's zu lang.
-                let versionen: Vec<String> = versionen.into_iter().take(6).collect();
+                // Nur die letzten 2 Versionen nehmen: dieser Text landet über
+                // das Selbstbild in JEDEM System-Prompt (systemvorspann(),
+                // Schritt 2) - bei Ollama ohne Prompt-Caching kostet jede
+                // zusätzliche Version echte Tokens bei jedem einzelnen
+                // Aufruf, nicht nur einmal. War vorher 6 Versionen (bei
+                // Wer-ist-Famulus.md zuletzt >200 Zeilen); die vollständige
+                // Historie steht ohnehin unverändert in CHANGELOG.md, ein
+                // Duplikat davon im Vault bringt nichts außer Kosten.
+                const JUENGSTE_VERSIONEN: usize = 2;
+                let versionen: Vec<String> = versionen.into_iter().take(JUENGSTE_VERSIONEN).collect();
                 if versionen.is_empty() {
                     return String::new();
                 }
@@ -197,7 +205,11 @@ impl SelbstmodellTool {
                 // CHANGELOG vor der nächsten Überschrift steht - mit "\n"
                 // statt "\n\n" verbinden, sonst entstehen doppelte
                 // Leerzeilen zwischen den Versionen.
-                return versionen.join("\n").trim_end().to_string();
+                let ausschnitt = versionen.join("\n").trim_end().to_string();
+                return format!(
+                    "{ausschnitt}\n\n(Nur die {JUENGSTE_VERSIONEN} jüngsten Versionen - \
+                     vollständige Historie in CHANGELOG.md im Projektordner.)"
+                );
             }
         }
         String::new()
