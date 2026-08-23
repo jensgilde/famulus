@@ -11,7 +11,7 @@
 //! Objekt, und jedes Ergebnis ist eine eigene Nachricht mit `role: "tool"`.
 
 use super::{
-    http_client, require_api_key, LlmAntwort, LlmProvider, Message, ToolCall,
+    http_client, require_api_key, send_mit_retry, LlmAntwort, LlmProvider, Message, ToolCall,
     ToolDefinition,
 };
 use anyhow::{Context, Result};
@@ -179,21 +179,20 @@ impl LlmProvider for OpenAiProvider {
             body["tools"] = json!(openai_tools);
         }
 
-        let mut anfrage = self.client.post(&self.endpoint);
-        // Nur Authentifizierung anhängen, wenn ein Key gesetzt ist (Ollama
-        // braucht keinen).
-        if !self.api_key.is_empty() {
-            anfrage = anfrage.bearer_auth(&self.api_key);
-        }
-        for (name, wert) in &self.kopfzeilen {
-            anfrage = anfrage.header(*name, *wert);
-        }
-
-        let resp = anfrage
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!("Anfrage an {} fehlgeschlagen", self.endpoint))?;
+        let resp = send_mit_retry(|| {
+            let mut anfrage = self.client.post(&self.endpoint);
+            // Nur Authentifizierung anhängen, wenn ein Key gesetzt ist (Ollama
+            // braucht keinen).
+            if !self.api_key.is_empty() {
+                anfrage = anfrage.bearer_auth(&self.api_key);
+            }
+            for (name, wert) in &self.kopfzeilen {
+                anfrage = anfrage.header(*name, *wert);
+            }
+            anfrage.json(&body)
+        })
+        .await
+        .with_context(|| format!("Anfrage an {} fehlgeschlagen", self.endpoint))?;
 
         let status = resp.status();
         let value: Value = resp.json().await.context("Antwort war kein gültiges JSON")?;

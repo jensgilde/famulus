@@ -1,38 +1,18 @@
 #!/usr/bin/env bash
 # Baut Famulus fuer macOS und installiert es sicher nach /Applications.
 #
-# Geschichte: `cp -a Famulus.app /Applications/Famulus.app` nistet sich
-# selbst, wenn das Ziel schon existiert (`Famulus.app/Famulus.app`), und
-# `cp` in eine bestehende Datei hinein aendert deren Bytes UNTER einem
-# laufenden Prozess - beides endet in SIGKILL (Code Signature Invalid),
-# weil das Betriebssystem beim Nachladen einer Code-Seite merkt, dass die
-# Datei nicht mehr zur Signatur passt, mit der sie gestartet wurde.
+# Der atomare Austausch per rename(2) verhindert, dass ein paralleler
+# `open -a Famulus` auf ein halb kopiertes Bundle trifft. Aber macOS
+# versucht nach einem osascript-Quit manchmal einen Auto-Relaunch der
+# alten Instanz – und zwar aus dem BACKUP-Pfad, den wir gerade
+# umbenannt haben. Wenn dieser Relaunch zeitlich mit dem rm -rf des
+# Backups kollidiert, modifiziert macOS die Info.plist des Backups,
+# und das ist dieselbe Inode wie die laufende alte Instanz – SIGKILL.
 #
-# Die erste Version dieses Skripts hat das umgangen, indem es die laufende
-# Instanz zuerst beendet hat (osascript quit + warten). Das reicht nicht:
-# es ist eine Race Condition, kein Ausschluss. Wenn zwischen "beendet" und
-# "neues Bundle liegt vollstaendig an seinem Platz" irgendetwas die App neu
-# startet - ein Doppelklick, ein `open -a Famulus` aus einem anderen
-# Terminal, Famulus selbst in einem parallelen Shell-Aufruf - trifft dieser
-# Start auf ein halb kopiertes oder frisch ueberschriebenes Bundle. Genau
-# dieses Muster ist wiederholt aufgetreten.
-#
-# Deshalb jetzt: atomarer Austausch per rename(2) statt Kopieren.
-# rename() auf demselben Volume ist eine einzelne, unteilbare
-# Kernel-Operation - jeder Prozess, der gerade `open()`/`exec()` auf den
-# Pfad macht, sieht entweder die komplette alte oder die komplette neue
-# Version, nie etwas dazwischen. Und eine BEREITS laufende Instanz merkt
-# vom Austausch ueberhaupt nichts: ihr offenes Binary-Handle haengt am
-# Inode, nicht am Pfad - den kann man umbenennen oder loeschen, waehrend
-# der Prozess laeuft, ohne dass er davon etwas mitbekommt (Standard-Unix-
-# Verhalten). Das macht die Installation sicher *unabhaengig* davon, ob
-# vorher sauber beendet wurde - nicht nur "sicher, wenn man sich an die
-# Reihenfolge haelt".
-#
-# rename() kann ein bestehendes Verzeichnis nur ersetzen, wenn das Ziel
-# leer ist - ein App-Bundle ist es nicht. Deshalb zwei Rename-Schritte
-# statt einem: altes Bundle beiseite schieben, neues an seinen Platz,
-# dann das alte aufraeumen. Jeder einzelne Schritt ist fuer sich atomar.
+# Fix: Erst die alte Instanz sauber beenden und lange genug warten,
+# dass kein Auto-Relaunch mehr kommt. Erst dann den atomaren Swap
+# machen. Der atomare Swap selbst schützt dann vor parallelen Starts
+# aus anderen Quellen (Terminal, Finder, andere Skripte).
 
 set -euo pipefail
 
@@ -53,6 +33,47 @@ fi
 echo "==> Pruefe Signatur des frischen Builds..."
 codesign --verify --deep --strict --verbose=4 "$BUNDLE"
 
+# ── Mikrofon-Berechtigung in Info.plist einbauen ─────────────────────
+# Tauri 2 merge app.macOS.info_plist nicht immer zuverlaessig ins
+# gebaute Bundle. Mit PlistBuddy direkt nachpatchen – das ist
+# deterministisch und ueberlebt jeden Tauri-Update.
+echo "==> Patche NSMicrophoneUsageDescription in Info.plist..."
+/usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Famulus benötigt das Mikrofon für die Spracheingabe.'" \
+    "$BUNDLE/Contents/Info.plist" 2>/dev/null || \
+/usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription 'Famulus benötigt das Mikrofon für die Spracheingabe.'" \
+    "$BUNDLE/Contents/Info.plist"
+
+# Der PlistBuddy-Patch aendert Info.plist NACH dem Signieren durch
+# `cargo tauri build` - genau das Muster, das den wiederkehrenden
+# "Code Signature Invalid"-Crash verursacht hat (siehe Kommentar oben
+# und vault/03-Wissen/Wiederkehrender-Absturz-Code-Signature.md). Ohne
+# Neu-Signieren wuerde die naechste `codesign --verify` fehlschlagen
+# und - mit set -e - das ganze Skript sofort abbrechen.
+echo "==> Signiere nach dem Info.plist-Patch neu..."
+SIGNING_IDENTITY=$(/usr/bin/python3 -c \
+    "import json; print(json.load(open('gui/tauri.conf.json'))['bundle']['macOS']['signingIdentity'])")
+codesign --force --deep --sign "$SIGNING_IDENTITY" "$BUNDLE"
+
+# ── Alte Instanz ZUERST beenden, DANN swappen ────────────────────────
+# Vorher: Swap zuerst, dann kill. macOS auto-relaunch aus dem Backup
+# hat die Info.plist korrumpiert.
+# Jetzt: Kill zuerst, warten bis kein Relaunch mehr kommt, dann Swap.
+if pgrep -f "Famulus.app/Contents/MacOS/famulus-gui" > /dev/null 2>&1; then
+    echo "==> Beende laufende Famulus-Instanz..."
+    osascript -e 'quit app "Famulus"' 2>/dev/null || true
+    # Warte, bis der Prozess wirklich weg ist – mit Sicherheitspuffer
+    # gegen macOS Auto-Relaunch (LaunchServices / Resume).
+    for _ in $(seq 1 20); do
+        pgrep -f "Famulus.app/Contents/MacOS/famulus-gui" > /dev/null 2>&1 || break
+        sleep 0.5
+    done
+    # Hartes Kill als Fallback
+    pkill -f "Famulus.app/Contents/MacOS/famulus-gui" 2>/dev/null || true
+    # Zusaetzliche Wartezeit: macOS Resume kann bis zu 2 Sekunden
+    # nach dem Quit noch einen Relaunch triggern. Wir warten 3.
+    sleep 3
+fi
+
 echo "==> Installiere atomar nach $DEST..."
 rm -rf "$BACKUP"
 if [ -d "$DEST" ]; then
@@ -63,20 +84,6 @@ rm -rf "$BACKUP"
 
 echo "==> Pruefe installiertes Bundle..."
 codesign --verify --deep --strict --verbose=4 "$DEST"
-
-# Ab hier reine Komfort-Sache, nicht mehr sicherheitsrelevant: eine bereits
-# laufende (alte) Instanz laeuft dank des atomaren Austauschs oben
-# unbeeindruckt weiter. Damit Jens aber nicht zwei Versionen gleichzeitig
-# offen hat, ohne es zu merken, hier trotzdem sauber beenden und neu starten.
-if pgrep -f "Famulus.app/Contents/MacOS/famulus-gui" > /dev/null 2>&1; then
-    echo "==> Beende laufende (alte) Famulus-Instanz..."
-    osascript -e 'quit app "Famulus"' 2>/dev/null || true
-    for _ in $(seq 1 20); do
-        pgrep -f "Famulus.app/Contents/MacOS/famulus-gui" > /dev/null 2>&1 || break
-        sleep 0.5
-    done
-    pkill -f "Famulus.app/Contents/MacOS/famulus-gui" 2>/dev/null || true
-fi
 
 echo "==> Starte Famulus..."
 open -a Famulus

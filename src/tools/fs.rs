@@ -69,10 +69,21 @@ impl Tool for ReadFileTool {
 
         let datei = tokio::fs::File::open(&path).await?;
         let mut puffer = Vec::new();
-        // `take` liest höchstens so viele Bytes, egal wie groß die Datei ist.
-        datei.take(MAX_DATEI_BYTES).read_to_end(&mut puffer).await?;
+        // Ein Byte mehr als der Deckel lesen: nur so lässt sich unterscheiden,
+        // ob die Datei genau MAX_DATEI_BYTES groß ist (nichts fehlt) oder
+        // größer (wirklich abgeschnitten). Mit `take(MAX_DATEI_BYTES)` allein
+        // war `puffer.len() == MAX_DATEI_BYTES` bei einer exakt passenden
+        // Datei fälschlich als "abgeschnitten" markiert, obwohl der komplette
+        // Inhalt gelesen wurde.
+        datei
+            .take(MAX_DATEI_BYTES + 1)
+            .read_to_end(&mut puffer)
+            .await?;
 
-        let abgeschnitten = puffer.len() as u64 == MAX_DATEI_BYTES;
+        let abgeschnitten = puffer.len() as u64 > MAX_DATEI_BYTES;
+        if abgeschnitten {
+            puffer.truncate(MAX_DATEI_BYTES as usize);
+        }
         let mut inhalt = String::from_utf8_lossy(&puffer).into_owned();
         if abgeschnitten {
             inhalt.push_str("\n\n[... Datei ist größer als 4 MB, hier abgeschnitten ...]");

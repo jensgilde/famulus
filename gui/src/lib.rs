@@ -146,6 +146,23 @@ fn stoppe_auftrag(app: AppHandle, laufender: State<'_, LaufenderAuftrag>) {
             },
         );
     }
+
+    // Auf iOS läuft der eigentliche Agent-Auftrag auf dem Mac, nicht hier.
+    // Der handle.abort() oben stoppt nur den lokalen Weiterleitungs-Task
+    // (remote::client_auftrag) - das kappt bloß, dass dieses Gerät noch
+    // Ereignisse empfängt. Ohne diesen Aufruf liefe der Agent auf dem Mac
+    // unbeaufsichtigt weiter: LLM-Anfragen, Werkzeugaufrufe, Kosten - die
+    // UI zeigt "abgebrochen", tatsächlich passiert im Hintergrund weiter
+    // alles.
+    #[cfg(target_os = "ios")]
+    {
+        tauri::async_runtime::spawn(async move {
+            let ip = remote::mac_tailscale_ip().await;
+            if let Err(e) = remote::client_abbrechen(&ip).await {
+                eprintln!("[famulus] Abbrechen auf dem Mac fehlgeschlagen: {e}");
+            }
+        });
+    }
 }
 
 #[tauri::command]
@@ -195,6 +212,12 @@ async fn credits() -> Result<String, String> {
                 .clone()
                 .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string()),
         ),
+        // Ollama läuft lokal ohne Guthabenkonzept. Ohne diesen Zweig fällt
+        // Ollama in den `other`-Fall und credits() liefert bei jedem der
+        // 30-Sekunden-Polls (siehe ui/index.html: setInterval(ladeCredits))
+        // einen Fehler - remote_credits (remote.rs) behandelt Ollama schon
+        // richtig, hier fehlte die gleiche Sonderbehandlung.
+        "ollama" => return Ok("lokal".to_string()),
         other => return Err(format!("Unbekannter Provider '{other}'.")),
     };
 

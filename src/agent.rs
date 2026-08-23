@@ -264,6 +264,12 @@ impl Agent {
         let tool_defs: Vec<_> = self.tools.values().map(|t| t.definition()).collect();
 
         for turn in 0..self.max_turns {
+            // Jede Runde hängt Assistant- und ToolResults-Nachrichten an -
+            // bei max_turns=997 reicht ein einmaliges Kürzen vor der
+            // Schleife nicht, um das Provider-Kontextlimit über einen
+            // langen Auftrag hinweg einzuhalten.
+            nachrichten_kuerzen(&mut nachrichten);
+
             let antwort = self
                 .provider
                 .next(system.as_deref(), &nachrichten, &tool_defs)

@@ -85,15 +85,46 @@ impl Gedaechtnis {
         )?;
 
         // ── Stufe 1: FTS5-Volltextsuche ───────────────────────────────
-        // content='erinnerungen' heißt: FTS5 liest direkt aus der
-        // erinnerungen-Tabelle. Keine Trigger nötig, immer synchron.
+        // content='erinnerungen' heißt: die Spaltenwerte kommen aus der
+        // erinnerungen-Tabelle. Der Suchindex selbst (die invertierte
+        // Liste) wird dadurch aber NICHT automatisch mitgepflegt - SQLite
+        // synchronisiert externe Content-Tabellen nur über Trigger. Ohne
+        // sie bleibt der Index leer und jede MATCH-Suche liefert null
+        // Treffer, obwohl `erinnerungen` selbst befüllt ist.
         verbindung.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS erinnerungen_fts USING fts5(
                 inhalt,
                 content='erinnerungen',
                 content_rowid='id'
-            );",
+            );
+            CREATE TRIGGER IF NOT EXISTS erinnerungen_fts_ai AFTER INSERT ON erinnerungen BEGIN
+                INSERT INTO erinnerungen_fts(rowid, inhalt) VALUES (new.id, new.inhalt);
+            END;
+            CREATE TRIGGER IF NOT EXISTS erinnerungen_fts_ad AFTER DELETE ON erinnerungen BEGIN
+                INSERT INTO erinnerungen_fts(erinnerungen_fts, rowid, inhalt) VALUES ('delete', old.id, old.inhalt);
+            END;
+            CREATE TRIGGER IF NOT EXISTS erinnerungen_fts_au AFTER UPDATE ON erinnerungen BEGIN
+                INSERT INTO erinnerungen_fts(erinnerungen_fts, rowid, inhalt) VALUES ('delete', old.id, old.inhalt);
+                INSERT INTO erinnerungen_fts(rowid, inhalt) VALUES (new.id, new.inhalt);
+            END;",
         )?;
+
+        // Migration für bestehende gedaechtnis.db: Zeilen, die vor den
+        // obigen Triggern eingefügt wurden, fehlen im Suchindex. Einmalig
+        // nachziehen, ohne die erinnerungen-Tabelle selbst anzufassen.
+        {
+            let anzahl: i64 =
+                verbindung.query_row("SELECT count(*) FROM erinnerungen", [], |r| r.get(0))?;
+            let indiziert: i64 = verbindung
+                .query_row("SELECT count(*) FROM erinnerungen_fts_docsize", [], |r| {
+                    r.get(0)
+                })
+                .unwrap_or(0);
+            if indiziert < anzahl {
+                verbindung
+                    .execute_batch("INSERT INTO erinnerungen_fts(erinnerungen_fts) VALUES('rebuild');")?;
+            }
+        }
 
         // Vault-Index: wird bei Bedarf neu aufgebaut.
         verbindung.execute_batch(
@@ -230,7 +261,7 @@ impl Gedaechtnis {
                      FROM erinnerungen e
                      JOIN erinnerungen_fts f ON e.id = f.rowid
                      WHERE erinnerungen_fts MATCH ?1 AND e.art != ?2
-                     ORDER BY bm25(erinnerungen_fts, 0, 0, 0, 0)
+                     ORDER BY bm25(erinnerungen_fts)
                      LIMIT ?3",
                 )?;
 
@@ -331,12 +362,20 @@ impl Gedaechtnis {
             "SELECT pfad, snippet(vault_idx, 1, '<mark>', '</mark>', '...', 40)
              FROM vault_idx
              WHERE vault_idx MATCH ?1
-             ORDER BY bm25(vault_idx, 0, 0, 0, 0)
+             ORDER BY bm25(vault_idx)
              LIMIT ?2",
         )?;
 
+        // `begriff` kommt vom Agenten (letztlich einem LLM) und darf keine
+        // rohe FTS5-Query sein: ein Streuzeichen wie `"` lässt den
+        // MATCH-Ausdruck mit "unterminated string" scheitern, und ein
+        // Wort wie "NOT"/"AND"/"OR" würde als FTS5-Operator statt als
+        // Suchwort interpretiert. Anführungszeichen escapen und als
+        // Phrase einfassen, so wie in history::suche().
+        let fts_muster = format!("\"{}\"", begriff.replace('"', "\"\""));
+
         let ergebnisse = stmt
-            .query_map(params![begriff, hoechstens as i64], |zeile| {
+            .query_map(params![fts_muster, hoechstens as i64], |zeile| {
                 Ok((zeile.get::<_, String>(0)?, zeile.get::<_, String>(1)?))
             })?
             .filter_map(|r| r.ok())
@@ -767,6 +806,80 @@ mod tests {
         .unwrap();
         let treffer = g.relevante("Wo liegt der Obsidian-Vault?", 5).unwrap();
         assert!(treffer.iter().any(|e| e.inhalt.contains("Hermes-Vault")));
+        std::fs::remove_file(pfad).ok();
+    }
+
+    /// Prüft den FTS5-Index direkt (nicht über `relevante()`, das bei
+    /// leerem Index still auf die Keyword-Methode zurückfällt und damit
+    /// eine defekte Trigger-Synchronisation verschleiern würde).
+    #[test]
+    fn fts_index_bleibt_mit_erinnerungen_synchron() {
+        let pfad = temp();
+        let g = Gedaechtnis::oeffnen(&pfad).unwrap();
+        g.merken(ART_FAKT, "Cargo braucht pkgconfig zum Bauen", "test")
+            .unwrap();
+        {
+            let verbindung = g.verbindung.lock().unwrap();
+            let treffer: i64 = verbindung
+                .query_row(
+                    "SELECT count(*) FROM erinnerungen_fts WHERE erinnerungen_fts MATCH '\"pkgconfig\"'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(treffer, 1, "Neue Erinnerung muss sofort im FTS5-Index stehen");
+        }
+        // Löschen muss den Indexeintrag ebenfalls entfernen.
+        {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung.execute("DELETE FROM erinnerungen", []).unwrap();
+            let treffer: i64 = verbindung
+                .query_row(
+                    "SELECT count(*) FROM erinnerungen_fts WHERE erinnerungen_fts MATCH '\"pkgconfig\"'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(treffer, 0, "Gelöschte Erinnerung darf nicht mehr auffindbar sein");
+        }
+        std::fs::remove_file(pfad).ok();
+    }
+
+    /// Eine bestehende gedaechtnis.db kann Zeilen enthalten, die vor der
+    /// Trigger-Synchronisation eingefügt wurden. `oeffnen()` muss den
+    /// Index dafür einmalig nachziehen ("rebuild"), ohne die Erinnerungen
+    /// selbst anzufassen.
+    #[test]
+    fn bestehende_db_ohne_index_wird_beim_oeffnen_nachindiziert() {
+        let pfad = temp();
+        {
+            // Simuliert eine alte DB: Tabelle direkt befüllt, am FTS5-Index vorbei.
+            let verbindung = Connection::open(&pfad).unwrap();
+            verbindung
+                .execute_batch(
+                    "CREATE TABLE erinnerungen (
+                        id       INTEGER PRIMARY KEY,
+                        art      TEXT NOT NULL,
+                        inhalt   TEXT NOT NULL UNIQUE,
+                        quelle   TEXT,
+                        erstellt TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+                    );",
+                )
+                .unwrap();
+            verbindung
+                .execute(
+                    "INSERT INTO erinnerungen (art, inhalt) VALUES (?1, ?2)",
+                    params![ART_FAKT, "Alte Erinnerung ohne FTS5-Indexeintrag"],
+                )
+                .unwrap();
+        }
+        let g = Gedaechtnis::oeffnen(&pfad).unwrap();
+        assert_eq!(g.anzahl().unwrap(), 1, "oeffnen() darf keine Zeilen verlieren");
+        let treffer = g.relevante("Alte Erinnerung", 5).unwrap();
+        assert!(
+            treffer.iter().any(|e| e.inhalt.contains("Alte Erinnerung")),
+            "Nachträglich indizierte Alt-Erinnerung muss auffindbar sein"
+        );
         std::fs::remove_file(pfad).ok();
     }
 

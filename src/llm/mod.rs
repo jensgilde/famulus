@@ -133,11 +133,46 @@ fn require_api_key(var_name: &str) -> anyhow::Result<String> {
 /// Der Timeout ist der Punkt, um den es hier geht. Ohne ihn wartet Famulus
 /// endlos, wenn der Dienst die Verbindung offen lässt, ohne zu antworten -
 /// und das sieht von außen exakt aus wie ein Modell, das nachdenkt.
+///
+/// `pool_idle_timeout` ist bewusst kurz gesetzt: reqwest hält offene
+/// Verbindungen im Pool warm, um sie für die nächste Anfrage
+/// wiederzuverwenden. Schließt der Server (oder ein Proxy davor, wie bei
+/// hyper.charm.land) eine Verbindung, während sie im Pool auf
+/// Wiederverwendung wartet, merkt reqwest das erst beim nächsten
+/// Schreibversuch - das Ergebnis ist "connection closed before message
+/// completed", obwohl der Dienst selbst nichts abbekommen hat. 15 Sekunden
+/// liegen sicher unter den Idle-Timeouts gängiger Reverse-Proxys (meist
+/// 30-60s), sodass Famulus die Verbindung von sich aus aufgibt, bevor der
+/// Server das tut.
 fn http_client(timeout: Duration) -> anyhow::Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .timeout(timeout)
         .connect_timeout(Duration::from_secs(20))
+        .pool_idle_timeout(Duration::from_secs(15))
         .build()?)
+}
+
+/// Schickt eine Anfrage ab und wiederholt sie einmal, wenn der Fehler nach
+/// einer toten Pool-Verbindung aussieht.
+///
+/// `pool_idle_timeout` oben verkleinert das Zeitfenster für eine tote
+/// Verbindung, schließt es aber nicht: der Server kann jederzeit früher
+/// abbauen. Ein zweiter Versuch mit `baue_anfrage()` erzeugt eine komplett
+/// neue Anfrage (reqwest holt sich dafür automatisch eine frische
+/// Verbindung aus dem Pool oder baut eine neue auf) und behebt damit genau
+/// die Fehlerklasse, die als "connection closed before message completed"
+/// auftaucht. Auf echte Zeitüberschreitungen wird NICHT erneut versucht -
+/// die haben nichts mit einer toten Pool-Verbindung zu tun, und ein
+/// zweiter Versuch würde die Wartezeit nur verdoppeln.
+async fn send_mit_retry(
+    baue_anfrage: impl Fn() -> reqwest::RequestBuilder,
+) -> reqwest::Result<reqwest::Response> {
+    match baue_anfrage().send().await {
+        Err(fehler) if !fehler.is_timeout() && (fehler.is_connect() || fehler.is_request()) => {
+            baue_anfrage().send().await
+        }
+        ergebnis => ergebnis,
+    }
 }
 
 /// Schneidet einen `base_url` aus der Config auf die Form, an die sich der

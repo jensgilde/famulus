@@ -45,6 +45,13 @@ enum RemoteRequest {
     PresetsSpeichern { name: String, prompt: String },
     #[serde(rename = "presets_loeschen")]
     PresetsLoeschen { name: String },
+    /// Bricht den aktuell auf dem Mac laufenden Auftrag ab. Nötig, weil das
+    /// Aborten des Client-seitigen Weiterleitungs-Tasks (siehe stoppe_auftrag
+    /// in lib.rs) nur verhindert, dass das iPad noch Ereignisse empfängt -
+    /// der Agent-Lauf auf dem Mac liefe sonst unbeaufsichtigt weiter (LLM-
+    /// Anfragen, Werkzeugaufrufe, Kosten), ohne dass die UI das noch zeigt.
+    #[serde(rename = "abbrechen")]
+    Abbrechen,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -78,7 +85,15 @@ use famulus_core::agent::Agent;
 use famulus_core::config::Config;
 use famulus_core::llm::{self, Message};
 use famulus_core::ui::Ui;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+
+/// Der aktuell auf dem Mac laufende Server-seitige Auftrag (falls einer
+/// läuft). Ein neuer Auftrag löst den alten ab (wie lokal in lib.rs), und
+/// "abbrechen" kann darüber den echten Agent-Lauf stoppen - nicht nur die
+/// Ereignis-Weiterleitung zum anfragenden Gerät kappen (siehe Kommentar bei
+/// RemoteRequest::Abbrechen).
+static LAUFENDER_SERVER_AUFTRAG: LazyLock<StdMutex<Option<tokio::task::JoinHandle<()>>>> =
+    LazyLock::new(|| StdMutex::new(None));
 
 /// Typ-Alias für die Schreibhälfte einer WebSocket-Verbindung.
 type WsTx = futures_util::stream::SplitSink<
@@ -220,6 +235,14 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                     }
                 }
                 RemoteRequest::Auftrag { auftrag, verlauf } => {
+                    // Nur ein Auftrag gleichzeitig - ein neuer löst den
+                    // vorigen ab, statt dass zwei Agent-Läufe parallel in
+                    // dieselbe History schreiben und ihre Ereignisse sich
+                    // auf der WS-Verbindung verschränken.
+                    if let Some(alt) = LAUFENDER_SERVER_AUFTRAG.lock().unwrap().take() {
+                        alt.abort();
+                    }
+
                     let verlauf: Vec<Message> = verlauf
                         .into_iter()
                         .map(|e| {
@@ -234,10 +257,23 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                         })
                         .collect();
 
-                    let tx_for_task = Arc::clone(&tx);
-
+                    // RemoteUi::ereignis() lief bisher pro Ereignis in einem
+                    // eigenen tokio::task::spawn - das Scheduling entscheidet
+                    // dann über die Sendereihenfolge, nicht mehr die
+                    // Aufrufreihenfolge (Streaming-Textchunks und
+                    // tool_start/tool_end-Paare könnten vertauscht ankommen).
+                    // Über einen Kanal mit genau einem Abnehmer-Task bleibt
+                    // die Emissionsreihenfolge erhalten.
+                    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AgentEvent>();
+                    let tx_for_forward = Arc::clone(&tx);
                     tokio::spawn(async move {
-                        let ui: Arc<dyn Ui> = Arc::new(RemoteUi { tx: tx_for_task.clone() });
+                        while let Some(event) = event_rx.recv().await {
+                            sende_event(&tx_for_forward, &event).await;
+                        }
+                    });
+
+                    let handle = tokio::spawn(async move {
+                        let ui: Arc<dyn Ui> = Arc::new(RemoteUi { tx: event_tx.clone() });
 
                         let vorbereitung = (|| -> anyhow::Result<(Config, Box<dyn llm::LlmProvider>)> {
                             let config = Config::load()?;
@@ -249,18 +285,25 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                             Ok((config, provider)) => {
                                 let agent = Agent::new(config, provider, ui).await;
                                 if let Err(e) = agent.run_task(&verlauf, &auftrag).await {
-                                    sende_event(&tx_for_task, &AgentEvent::Abgebrochen {
+                                    let _ = event_tx.send(AgentEvent::Abgebrochen {
                                         fehler: format!("{e:#}"),
-                                    }).await;
+                                    });
                                 }
                             }
                             Err(e) => {
-                                sende_event(&tx_for_task, &AgentEvent::Abgebrochen {
+                                let _ = event_tx.send(AgentEvent::Abgebrochen {
                                     fehler: format!("{e:#}"),
-                                }).await;
+                                });
                             }
                         }
                     });
+
+                    *LAUFENDER_SERVER_AUFTRAG.lock().unwrap() = Some(handle);
+                }
+                RemoteRequest::Abbrechen => {
+                    if let Some(handle) = LAUFENDER_SERVER_AUFTRAG.lock().unwrap().take() {
+                        handle.abort();
+                    }
                 }
             }
         }
@@ -416,8 +459,16 @@ async fn setze_modell_ermitteln(provider: &str, model: &str) -> Result<String, S
         .parse()
         .map_err(|e| format!("famulus.toml kein gültiges TOML: {e}"))?;
 
-    config["provider"] = toml::Value::String(provider.to_string());
-    config["model"] = toml::Value::String(model.to_string());
+    // toml::Value::IndexMut ist kein Auto-Vivify wie bei serde_json::Value -
+    // config["provider"] = ... panickt mit "index not found", wenn der
+    // Schlüssel noch nicht existiert (z.B. eine famulus.toml ohne bisher
+    // gesetztes Modell). Das läuft in einem tokio::spawn-Task ohne
+    // Absturzschutz für die Verbindung - über .as_table_mut()/.insert()
+    // legt es den Schlüssel bei Bedarf an, statt zu panicken.
+    if let Some(table) = config.as_table_mut() {
+        table.insert("provider".to_string(), toml::Value::String(provider.to_string()));
+        table.insert("model".to_string(), toml::Value::String(model.to_string()));
+    }
 
     std::fs::write(&pfad, toml::to_string(&config).map_err(|e| format!("toml schreiben fehlgeschlagen: {e}"))?)
         .map_err(|e| format!("Datei schreiben fehlgeschlagen: {e}"))?;
@@ -427,16 +478,15 @@ async fn setze_modell_ermitteln(provider: &str, model: &str) -> Result<String, S
 
 
 struct RemoteUi {
-    tx: Arc<tokio::sync::Mutex<WsTx>>,
+    tx: mpsc::UnboundedSender<AgentEvent>,
 }
 
 impl Ui for RemoteUi {
     fn ereignis(&self, ereignis: AgentEvent) {
-        let tx = Arc::clone(&self.tx);
-        let event = ereignis.clone();
-        tokio::task::spawn(async move {
-            sende_event(&tx, &event).await;
-        });
+        // In den Kanal legen statt selbst zu senden: sende_event() läuft in
+        // genau einem Abnehmer-Task (siehe RemoteRequest::Auftrag oben) und
+        // hält damit die Emissionsreihenfolge ein.
+        let _ = self.tx.send(ereignis);
     }
 }
 
@@ -553,6 +603,34 @@ pub async fn client_auftrag(
             }
         }
     }
+
+    Ok(())
+}
+
+/// Fordert den Mac auf, den aktuell laufenden Auftrag abzubrechen. Fire-and-
+/// forget - anders als bei den anderen Anfragen gibt es keine sinnvolle
+/// Antwort abzuwarten (stoppe_auftrag in lib.rs hat die UI schon lokal
+/// zurückgesetzt, das hier ist nur die Nachricht ans Backend).
+/// Nur von stoppe_auftrag auf iOS aufgerufen (siehe cfg dort) - auf einem
+/// nicht-iOS-Build (dem Mac selbst) läuft ein Auftrag nie über die
+/// Fernbedienung, daher hier kein #[allow(dead_code)] ohne Grund, sondern
+/// zielgerichtet nur für den Nicht-iOS-Check.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub async fn client_abbrechen(server_ip: &str) -> Result<(), String> {
+    let url = format!("ws://{server_ip}:{SERVER_PORT}");
+
+    let (ws, _) = tokio::time::timeout(VERBINDUNGS_TIMEOUT, tokio_tungstenite::connect_async(&url))
+        .await
+        .map_err(|_| format!("Zeitüberschreitung: Keine Verbindung zu {url}."))?
+        .map_err(|e| format!("Keine Verbindung: {e}"))?;
+
+    let (mut tx, _rx) = ws.split();
+
+    let request = RemoteRequest::Abbrechen;
+    let json = serde_json::to_string(&request).map_err(|e| format!("JSON-Fehler: {e}"))?;
+    tx.send(WsMsg::Text(json.into()))
+        .await
+        .map_err(|e| format!("Sende-Fehler: {e}"))?;
 
     Ok(())
 }

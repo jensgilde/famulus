@@ -848,10 +848,28 @@ function renderMessages() {
     messagesEl.appendChild(div);
   });
 
-  // Aktuelle Denk- und Werkzeug-Schritte
+  renderLiveSchritte();
+}
+
+/// Baut nur den "läuft gerade"-Block (Denk-Text + Werkzeug-Schritte) neu und
+/// hängt ihn ans Ende an - ohne die bereits fertigen Nachrichten anzufassen.
+///
+/// Während eines Zugs kommt pro Text-Chunk ein eigenes Ereignis rein, teils
+/// mehrmals pro Sekunde (siehe der 'text'/'tool_start'/... Switch weiter
+/// unten). Vorher hat jedes davon `renderMessages()` aufgerufen, das den
+/// KOMPLETTEN Verlauf per `innerHTML = ''` wegwirft und neu aufbaut - jede
+/// einzelne Nachricht spielt dann ihre `fadeIn`-Animation erneut ab, bei
+/// jedem einzelnen Chunk, für den gesamten sichtbaren Chat. Das sah aus wie
+/// ein ständig rutschender Chat, war aber ein ständig neu einsetzender
+/// gesamter Verlauf. Diese Funktion fasst nur den einen, noch laufenden
+/// Block an; abgeschlossene Nachrichten bleiben unangetastet.
+function renderLiveSchritte() {
+  const bestehend = messagesEl.querySelector('.msg.live');
+  if (bestehend) bestehend.remove();
+
   if (aktuellerDenktText || aktuellerAgentSchritte.length > 0) {
     const div = document.createElement('div');
-    div.className = 'msg assistant';
+    div.className = 'msg assistant live';
 
     if (aktuellerDenktText) {
       const denk = document.createElement('div');
@@ -884,7 +902,18 @@ function renderMessages() {
     messagesEl.appendChild(div);
   }
 
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrolleNachUnten();
+}
+
+/// Ans Ende scrollen, nachdem der Browser das neue Layout tatsächlich
+/// berechnet hat - `scrollHeight` direkt nach einer DOM-Änderung zu lesen
+/// ist zwar synchron korrekt, aber `requestAnimationFrame` vermeidet, dass
+/// die Zuweisung mit einem noch laufenden Layout-Task (z.B. Textarea-
+/// Autoresize) kollidiert.
+function scrolleNachUnten() {
+  requestAnimationFrame(() => {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  });
   haengeTtsButtons();
 }
 
@@ -1334,32 +1363,32 @@ listen('famulus-ereignis', e => {
   switch (ev.art) {
     case 'text':
       aktuellerDenktText = (aktuellerDenktText || '') + ev.chunk;
-      renderMessages();
+      renderLiveSchritte();
       renderStatusbar();
       break;
     case 'tool_start':
       aktuellerAgentSchritte.push({ art: 'werkzeug', name: ev.name, argumente: ev.args, ergebnis: null });
       aktuellerDenktText = '';
-      renderMessages();
+      renderLiveSchritte();
       renderStatusbar();
       break;
     case 'tool_end': {
       const letzter = [...aktuellerAgentSchritte].reverse().find(s => s.art === 'werkzeug' && s.name === ev.name && s.ergebnis === null);
       if (letzter) letzter.ergebnis = ev.inhalt;
-      renderMessages();
+      renderLiveSchritte();
       break;
     }
     case 'erinnert':
       aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: `⌾ ${ev.anzahl} Erinnerungen im Kontext` });
-      renderMessages();
+      renderLiveSchritte();
       break;
     case 'gemmerkt':
       aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: `✎ (${ev.kategorie}) ${ev.inhalt}` });
-      renderMessages();
+      renderLiveSchritte();
       break;
     case 'reflektiere':
       aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: '⟳ Rückblick...' });
-      renderMessages();
+      renderLiveSchritte();
       break;
     case 'fertig':
       chat.nachrichten.push({ rolle: 'assistant', inhalt: aktuellerDenktText || ev.chunk || '' });

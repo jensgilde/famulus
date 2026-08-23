@@ -52,14 +52,41 @@ impl History {
         )?;
 
         // FTS5-Index für Chat-Suche – konsistent mit der Erinnerungen-Suche.
+        // content='chats' liest die Spaltenwerte aus der chats-Tabelle,
+        // hält den Suchindex selbst aber NICHT automatisch synchron -
+        // dafür braucht es Trigger. Ohne sie bleibt der Index leer und
+        // `suche()` findet nie etwas, egal wie viele Chats gespeichert sind.
         verbindung.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS chats_fts USING fts5(
                 titel,
                 nachrichten,
                 content='chats',
                 content_rowid='id'
-            );",
+            );
+            CREATE TRIGGER IF NOT EXISTS chats_fts_ai AFTER INSERT ON chats BEGIN
+                INSERT INTO chats_fts(rowid, titel, nachrichten) VALUES (new.id, new.titel, new.nachrichten);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chats_fts_ad AFTER DELETE ON chats BEGIN
+                INSERT INTO chats_fts(chats_fts, rowid, titel, nachrichten) VALUES ('delete', old.id, old.titel, old.nachrichten);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chats_fts_au AFTER UPDATE ON chats BEGIN
+                INSERT INTO chats_fts(chats_fts, rowid, titel, nachrichten) VALUES ('delete', old.id, old.titel, old.nachrichten);
+                INSERT INTO chats_fts(rowid, titel, nachrichten) VALUES (new.id, new.titel, new.nachrichten);
+            END;",
         )?;
+
+        // Migration für eine bestehende gedaechtnis.db: Chats, die vor
+        // den obigen Triggern gespeichert wurden, fehlen im Suchindex.
+        // Einmalig nachziehen, ohne die chats-Tabelle selbst anzufassen.
+        {
+            let anzahl: i64 = verbindung.query_row("SELECT count(*) FROM chats", [], |r| r.get(0))?;
+            let indiziert: i64 = verbindung
+                .query_row("SELECT count(*) FROM chats_fts_docsize", [], |r| r.get(0))
+                .unwrap_or(0);
+            if indiziert < anzahl {
+                verbindung.execute_batch("INSERT INTO chats_fts(chats_fts) VALUES('rebuild');")?;
+            }
+        }
 
         Ok(Self {
             verbindung: Mutex::new(verbindung),
@@ -177,5 +204,84 @@ impl History {
             (wert, id),
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        std::env::temp_dir().join(format!(
+            "famulus_history_{}_{}.db",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ))
+    }
+
+    /// Ohne Sync-Trigger auf `chats_fts` bleibt der FTS5-Index leer und
+    /// `suche()` findet nie etwas, egal wie viele Chats gespeichert sind.
+    #[test]
+    fn suche_findet_gespeicherten_chat() {
+        let pfad = temp();
+        let h = History::oeffnen(&pfad).unwrap();
+        h.speichern("Codesignierung", "Fehler beim Signieren der App").unwrap();
+        let treffer = h.suche("Signieren").unwrap();
+        assert_eq!(treffer.len(), 1);
+        assert_eq!(treffer[0].titel, "Codesignierung");
+        std::fs::remove_file(pfad).ok();
+    }
+
+    /// Aktualisierte Titel/Nachrichten müssen im Index nachgezogen werden,
+    /// gelöschte Chats dürfen nicht mehr auffindbar sein.
+    #[test]
+    fn suche_folgt_aktualisierung_und_loeschung() {
+        let pfad = temp();
+        let h = History::oeffnen(&pfad).unwrap();
+        let id = h.speichern("Altes Thema", "Ursprünglicher Inhalt").unwrap();
+
+        h.aktualisieren(id, "Neues Thema", "Geänderter Inhalt").unwrap();
+        assert!(h.suche("Geänderter").unwrap().iter().any(|c| c.id == id));
+        assert!(h.suche("Ursprünglicher").unwrap().is_empty());
+
+        h.loeschen(id).unwrap();
+        assert!(h.suche("Geänderter").unwrap().is_empty());
+        std::fs::remove_file(pfad).ok();
+    }
+
+    /// Eine bestehende gedaechtnis.db kann Chats enthalten, die vor der
+    /// Trigger-Synchronisation gespeichert wurden. `oeffnen()` muss den
+    /// Index dafür einmalig nachziehen, ohne die Chats selbst anzufassen.
+    #[test]
+    fn bestehende_db_ohne_index_wird_beim_oeffnen_nachindiziert() {
+        let pfad = temp();
+        {
+            let verbindung = Connection::open(&pfad).unwrap();
+            verbindung
+                .execute_batch(
+                    "CREATE TABLE chats (
+                        id          INTEGER PRIMARY KEY,
+                        titel       TEXT NOT NULL,
+                        nachrichten TEXT NOT NULL DEFAULT '[]',
+                        erstellt    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                        geaendert   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                        archiviert  INTEGER NOT NULL DEFAULT 0
+                    );",
+                )
+                .unwrap();
+            verbindung
+                .execute(
+                    "INSERT INTO chats (titel, nachrichten) VALUES (?1, ?2)",
+                    ("Alter Chat", "[\"Netzwerkfehler beim Verbindungsaufbau\"]"),
+                )
+                .unwrap();
+        }
+        let h = History::oeffnen(&pfad).unwrap();
+        assert_eq!(h.liste().unwrap().len(), 1, "oeffnen() darf keine Zeilen verlieren");
+        let treffer = h.suche("Netzwerkfehler").unwrap();
+        assert_eq!(treffer.len(), 1, "Nachträglich indizierter Alt-Chat muss auffindbar sein");
+        std::fs::remove_file(pfad).ok();
     }
 }

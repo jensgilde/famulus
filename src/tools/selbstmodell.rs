@@ -10,7 +10,7 @@
 use super::Tool;
 use crate::llm::ToolDefinition;
 use crate::memory::Gedaechtnis;
-use crate::permissions::PermissionManager;
+use crate::permissions::{Decision, PermissionManager};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -52,7 +52,7 @@ impl Tool for SelbstmodellTool {
     async fn execute(
         &self,
         args: Value,
-        _permissions: &PermissionManager,
+        permissions: &PermissionManager,
     ) -> anyhow::Result<String> {
         let neue_erkenntnis = args
             .get("neue_erkenntnis")
@@ -131,14 +131,23 @@ impl Tool for SelbstmodellTool {
 
         // ── In den Vault schreiben ──────────────────────────────────
         let pfad = self.vault_pfad.join("Wer-ist-Famulus.md");
+        // Der Zielpfad ist zwar fest (kein Modell-Input), aber trotzdem
+        // gegen die Deny-Liste prüfen - dieselbe Vorsicht wie bei den
+        // vault_*-Werkzeugen: falls vault_pfad mal woandershin zeigt, soll
+        // das hier nicht stillschweigend durchrutschen.
+        match permissions.check_path(&pfad) {
+            Decision::Deny => anyhow::bail!("Zugriff verweigert: '{}' ist gesperrt.", pfad.display()),
+            Decision::Ask => anyhow::bail!("RÜCKFRAGE ERFORDERLICH: Der Pfad betrifft sensible Daten."),
+            Decision::Allow => {}
+        }
         tokio::fs::write(&pfad, &text).await?;
 
-        let id_len = if neue_erkenntnis.is_empty() {
+        let status = if neue_erkenntnis.is_empty() {
             "Selbstmodell aktualisiert"
         } else {
             "Selbstmodell mit neuer Erkenntnis aktualisiert"
         };
-        Ok(format!("{id_len} → {}\n\n{anzahl_erinnerungen} Erinnerungen, {} Provider in der Statistik.",
+        Ok(format!("{status} → {}\n\n{anzahl_erinnerungen} Erinnerungen, {} Provider in der Statistik.",
             pfad.display(),
             statistik.len()))
     }
@@ -158,20 +167,37 @@ impl SelbstmodellTool {
 
         for pfad in &kandidaten {
             if let Ok(inhalt) = tokio::fs::read_to_string(pfad).await {
-                // Nur die letzten 5 Versionen nehmen, sonst wird's zu lang.
-                let versionen: Vec<&str> = inhalt
-                    .split("## ")
-                    .skip(1)
-                    .take(6)
-                    .collect();
+                // Nur an echten Versions-Überschriften ("## [x.y.z]") trennen -
+                // nicht am bloßen Teilstring "## ". Der steckt auch in
+                // Unterüberschriften wie "### Hinzugefügt" (Zeichen 2-4 von
+                // "### " sind "## "), ein naiver str::split("## ") reißt die
+                // also mitten durch: ein "#" bleibt am vorherigen Block
+                // hängen, der Rest wird fälschlich zu einer eigenen
+                // "## "-Überschrift befördert. Zeilenweise mit starts_with
+                // prüfen, ob es wirklich eine Zeile ist, die mit "## "
+                // beginnt, umgeht das.
+                let mut versionen: Vec<String> = Vec::new();
+                for zeile in inhalt.lines() {
+                    if zeile.starts_with("## ") {
+                        versionen.push(String::new());
+                    }
+                    if let Some(aktuelle) = versionen.last_mut() {
+                        if !aktuelle.is_empty() {
+                            aktuelle.push('\n');
+                        }
+                        aktuelle.push_str(zeile);
+                    }
+                }
+                // Nur die letzten 6 Versionen nehmen, sonst wird's zu lang.
+                let versionen: Vec<String> = versionen.into_iter().take(6).collect();
                 if versionen.is_empty() {
                     return String::new();
                 }
-                return versionen
-                    .iter()
-                    .map(|v| format!("## {v}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                // Jeder Block endet schon mit der Leerzeile, die im
+                // CHANGELOG vor der nächsten Überschrift steht - mit "\n"
+                // statt "\n\n" verbinden, sonst entstehen doppelte
+                // Leerzeilen zwischen den Versionen.
+                return versionen.join("\n").trim_end().to_string();
             }
         }
         String::new()

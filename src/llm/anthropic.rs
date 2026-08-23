@@ -5,7 +5,7 @@
 //! Adresse, Key und Standardmodell, nicht im Code darunter.
 
 use super::{
-    http_client, require_api_key, LlmAntwort, LlmProvider, Message, ToolCall,
+    http_client, require_api_key, send_mit_retry, LlmAntwort, LlmProvider, Message, ToolCall,
     ToolDefinition,
 };
 use anyhow::{Context, Result};
@@ -178,16 +178,16 @@ impl LlmProvider for AnthropicProvider {
         // Dienste erwarten teils "Authorization: Bearer". Beides mitschicken
         // kostet nichts - es ist derselbe Key an denselben Host - und spart
         // eine Konfigurationsoption, die man falsch setzen könnte.
-        let resp = self
-            .client
-            .post(&self.endpoint)
-            .header("x-api-key", &self.api_key)
-            .bearer_auth(&self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!("Anfrage an {} fehlgeschlagen", self.endpoint))?;
+        let resp = send_mit_retry(|| {
+            self.client
+                .post(&self.endpoint)
+                .header("x-api-key", &self.api_key)
+                .bearer_auth(&self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body)
+        })
+        .await
+        .with_context(|| format!("Anfrage an {} fehlgeschlagen", self.endpoint))?;
 
         let status = resp.status();
         let value: Value = resp.json().await.context("Antwort war kein gültiges JSON")?;
