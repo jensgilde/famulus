@@ -1069,7 +1069,15 @@ pub async fn client_presets_loeschen(server_ip: &str, name: &str) -> Result<serd
 pub async fn mac_tailscale_ip() -> String {
     // MagicDNS-Hostname – stabiler als die IP, die sich ändern kann.
     // Wird von Tailscale auf jedem Gerät im Netzwerk aufgelöst.
-    const HOSTNAME: &str = "macmini.tail29c723.ts.net";
+    //
+    // War lange "macmini.tail29c723.ts.net" - das ist mittlerweile ein
+    // TOTER, umbenannter Tailscale-Knoten (laut `tailscale status`:
+    // offline, "last seen"). Der aktuelle Mac heißt im Tailnet
+    // "mac-mini-von-jens" (Self.DNSName laut `tailscale status --json`).
+    // Solange der alte Name drinstand, ist JEDE Fernbedienung vom iPad/
+    // iPhone aus fehlgeschlagen - Version, Modell-Liste, Zustand, alles
+    // schlug still fehl, weil keine Verbindung zustande kam.
+    const HOSTNAME: &str = "mac-mini-von-jens.tail29c723.ts.net";
 
     // Erst DNS-Auflösung, Fallback auf hartcodierte IP.
     if let Ok(addr) = tokio::net::lookup_host(format!("{HOSTNAME}:{SERVER_PORT}")).await {
@@ -1087,5 +1095,7 @@ pub async fn mac_tailscale_ip() -> String {
             return ip;
         }
     }
-    "100.70.211.30".to_string()
+    // Ebenfalls aktualisiert (war die IP desselben toten Knotens) -
+    // `tailscale ip -4` auf dem aktuellen Mac.
+    "100.107.234.56".to_string()
 }
