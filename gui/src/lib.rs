@@ -466,6 +466,22 @@ fn presets_loeschen(name: String) -> Result<serde_json::Value, String> {
     serde_json::to_value(presets).map_err(|e| format!("{e:#}"))
 }
 
+// ── TTS: Sprachausgabe ──────────────────────────────────────────────────────
+
+/// Spricht den übergebenen Text mit der macOS-Stimme „Anna" (Neural, de_DE).
+/// Läuft in einem separaten Tokio-Task, damit die GUI nicht blockiert.
+#[tauri::command]
+fn tts_sprich(text: String) {
+    tauri::async_runtime::spawn(async move {
+        let _ = tokio::process::Command::new("say")
+            .arg("-v")
+            .arg("Anna")
+            .arg(&text)
+            .status()
+            .await;
+    });
+}
+
 #[tauri::command]
 fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
@@ -639,6 +655,7 @@ pub fn run() {
             history_loeschen,
             history_archiv_liste,
             history_archivieren,
+            tts_sprich,
         ])
         .run(tauri::generate_context!())
         .expect("Famulus-Fenster konnte nicht gestartet werden");

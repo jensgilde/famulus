@@ -292,6 +292,17 @@
   #senden:hover { background: var(--accent-hover); }
   #senden:active { transform: scale(0.95); }
   #senden.stopp { background: var(--danger); color: #fff; }
+  .mic-btn, .speak-btn {
+    background: none; border: 1px solid var(--border);
+    color: var(--text-muted); width: 36px; height: 36px;
+    border-radius: 50%; cursor: pointer; font-size: 14px;
+    flex-shrink: 0; transition: all .15s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mic-btn:hover, .speak-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .mic-btn.aktiv { border-color: var(--danger); color: var(--danger); background: rgba(255,68,68,0.1); }
+  .mic-btn.aktiv:hover { color: var(--danger); }
+
 
   .statusbar {
     padding: 4px 20px; font-size: 10px; color: var(--text-faint);
@@ -372,6 +383,7 @@
         <div class="anhaenge-vorschau" id="anhaengeVorschau"></div>
         <div class="input-row">
           <input type="file" id="dateiEingabe" accept="image/*" multiple style="display:none" />
+          <button class="mic-btn" id="micBtn" title="Spracheingabe (ohne Enter)">🎤</button>
           <button class="upload-btn" id="uploadBtn" title="Bild anhängen (auch: Strg+V oder Drag & Drop)">📎</button>
           <textarea id="eingabe" placeholder="Schreib Famulus einen Auftrag…" rows="1"></textarea>
           <button id="senden">↑</button>
@@ -873,6 +885,7 @@ function renderMessages() {
   }
 
   messagesEl.scrollTop = messagesEl.scrollHeight;
+  haengeTtsButtons();
 }
 
 function renderAlles() {
@@ -1209,7 +1222,84 @@ async function los() {
   }
 }
 
-senden.addEventListener('click', () => {
+
+// ── STT: Spracheingabe ─────────────────────────────────────────────────────
+let speechRecognition = null;
+let micAktiv = false;
+
+const micBtn = document.getElementById("micBtn");
+micBtn.addEventListener("click", () => {
+  if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
+    zeigeFehlerBanner("Spracherkennung wird in diesem Browser nicht unterstützt.");
+    return;
+  }
+  if (micAktiv) {
+    if (speechRecognition) speechRecognition.stop();
+    micAktiv = false;
+    micBtn.classList.remove("aktiv");
+    return;
+  }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  speechRecognition = new SR();
+  speechRecognition.lang = "de-DE";
+  speechRecognition.continuous = true;
+  speechRecognition.interimResults = false;
+  speechRecognition.onresult = (event) => {
+    const letztes = event.results[event.results.length - 1];
+    if (letztes.isFinal) {
+      const text = letztes[0].transcript.trim();
+      if (text) {
+        eingabe.value = text;
+        eingabe.style.height = "auto";
+        eingabe.style.height = Math.min(eingabe.scrollHeight, 180) + "px";
+        if (!laeuft) los();
+      }
+    }
+  };
+  speechRecognition.onerror = (e) => {
+    if (e.error !== "aborted") zeigeFehlerBanner("Spracherkennung: " + e.error);
+    micAktiv = false;
+    micBtn.classList.remove("aktiv");
+  };
+  speechRecognition.onend = () => {
+    micAktiv = false;
+    micBtn.classList.remove("aktiv");
+  };
+  speechRecognition.start();
+  micAktiv = true;
+  micBtn.classList.add("aktiv");
+});
+
+// ── TTS: Sprachausgabe ─────────────────────────────────────────────────────
+async function ttsSprich(text) {
+  const plain = text.replace(/[*_`#>\/\[\]]/g, "").replace(/\n+/g, ". ").trim();
+  if (!plain) return;
+  try {
+    await invoke("tts_sprich", { text: plain });
+  } catch (e) {
+    // Fehler bei TTS still ignorieren
+  }
+}
+
+function haengeTtsButtons() {
+  document.querySelectorAll(".msg.assistant .msg-role").forEach(roleEl => {
+    if (roleEl.querySelector(".speak-btn")) return;
+    const btn = document.createElement("button");
+    btn.className = "speak-btn";
+    btn.title = "Vorlesen";
+    btn.textContent = "🔊";
+    btn.style.cssText = "width:24px;height:24px;font-size:12px;margin-left:8px;border:1px solid var(--border);border-radius:50%;background:none;color:var(--text-muted);cursor:pointer;";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const bubble = roleEl.parentElement?.querySelector(".msg-bubble");
+      if (bubble) ttsSprich(bubble.textContent || "");
+    });
+    roleEl.appendChild(btn);
+  });
+}
+
+senden.addEventListener
+('click', () => {
   if (laeuft) {
     invoke('stoppe_auftrag').catch(() => {});
   } else {
