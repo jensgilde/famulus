@@ -43,6 +43,17 @@ echo "==> Patche NSMicrophoneUsageDescription in Info.plist..."
 /usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription 'Famulus benötigt das Mikrofon für die Spracheingabe.'" \
     "$BUNDLE/Contents/Info.plist"
 
+# webkitSpeechRecognition braucht ZUSAETZLICH zum Mikrofon-Key diesen
+# hier - ohne ihn verweigert macOS' Speech-Recognition-Dienst jede
+# Anfrage sofort mit "service-not-allowed", noch bevor ueberhaupt ein
+# Freigabe-Dialog erscheinen koennte. Beide Keys sind fuer STT
+# zwingend, nicht nur einer.
+echo "==> Patche NSSpeechRecognitionUsageDescription in Info.plist..."
+/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Famulus benötigt Spracherkennung für die Spracheingabe.'" \
+    "$BUNDLE/Contents/Info.plist" 2>/dev/null || \
+/usr/libexec/PlistBuddy -c "Set :NSSpeechRecognitionUsageDescription 'Famulus benötigt Spracherkennung für die Spracheingabe.'" \
+    "$BUNDLE/Contents/Info.plist"
+
 # Der PlistBuddy-Patch aendert Info.plist NACH dem Signieren durch
 # `cargo tauri build` - genau das Muster, das den wiederkehrenden
 # "Code Signature Invalid"-Crash verursacht hat (siehe Kommentar oben

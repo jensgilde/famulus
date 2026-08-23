@@ -1001,12 +1001,20 @@ function chatWechseln(id) {
 }
 
 async function chatArchivieren(id) {
-  if (chats.length <= 1) return;
   const idx = chats.findIndex(c => c.id === id);
   if (idx === -1) return;
   const [chat] = chats.splice(idx, 1);
   archivedChats.push(chat);
-  if (aktiverChatId === id) aktiverChatId = chats[0].id;
+  // War das der letzte aktive Chat, braucht es einen neuen - sonst stünde
+  // die Chat-Liste leer da (dieselbe Logik wie beim allerersten Start,
+  // siehe chatsLaden()).
+  if (chats.length === 0) {
+    const neueId = 'c' + Date.now();
+    chats.push({ id: neueId, titel: 'Neuer Chat', nachrichten: [], createdAt: Date.now() });
+    aktiverChatId = neueId;
+  } else if (aktiverChatId === id) {
+    aktiverChatId = chats[0].id;
+  }
   if (chat.sqliteId) {
     await invoke('history_archivieren', { id: chat.sqliteId, archiviert: true }).catch(e => console.error('Archivieren:', e));
   }
@@ -1257,7 +1265,7 @@ let speechRecognition = null;
 let micAktiv = false;
 
 const micBtn = document.getElementById("micBtn");
-micBtn.addEventListener("click", () => {
+micBtn.addEventListener("click", async () => {
   if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
     zeigeFehlerBanner("Spracherkennung wird in diesem Browser nicht unterstützt.");
     return;
@@ -1268,6 +1276,22 @@ micBtn.addEventListener("click", () => {
     micBtn.classList.remove("aktiv");
     return;
   }
+
+  // webkitSpeechRecognition loest in Tauris WKWebView den macOS-
+  // Mikrofon-Dialog NICHT selbst aus - das System fragt nur bei einem
+  // eigenen getUserMedia nach. Ohne diesen Aufruf bleibt der TCC-
+  // Eintrag leer und die Spracherkennung scheitert sofort mit
+  // "not-allowed", ganz ohne dass Jens je gefragt wurde. Den Stream
+  // selbst brauchen wir nicht - SpeechRecognition erfasst das Mikrofon
+  // eigenstaendig - deshalb sofort wieder stoppen.
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(t => t.stop());
+  } catch (e) {
+    zeigeFehlerBanner("Mikrofon-Zugriff verweigert: " + e.message);
+    return;
+  }
+
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   speechRecognition = new SR();
   speechRecognition.lang = "de-DE";

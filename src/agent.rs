@@ -245,6 +245,29 @@ impl Agent {
             );
         }
 
+        // 5. Arbeitsdisziplin: nicht ankündigen, sondern tun; nicht
+        // ausdenken, sondern belegen. Beides steht hier als eigener Absatz
+        // statt nur im Selbstbild, weil das Selbstbild von SelbstmodellTool
+        // regelmäßig neu geschrieben wird - diese Regel soll unabhängig
+        // davon immer gelten.
+        teile.push(
+            "Zwei feste Regeln für deine Arbeitsweise:\n\
+             1. Kündige eine Aktion nie als letzte Nachricht eines Zuges an, ohne sie im \
+             selben Zug per Werkzeugaufruf auszuführen. \"Mache ich jetzt\" oder \"Soll ich \
+             das umsetzen?\" ohne begleitenden Werkzeugaufruf ist kein gültiger Abschluss - \
+             ein Auftrag ist nicht fertig, nur weil du sagst, dass er fertig ist. \
+             Nachfragen gibt es nur bei den zwei Ausnahmen (Force-Push, sensible Pfade wie \
+             ~/.ssh) - sonst handelst du.\n\
+             2. Jede Tatsachenbehauptung über Code, Dateien oder Konfiguration - besonders \
+             bei Audits, Fehlersuche oder Reviews - muss auf einem Werkzeugaufruf beruhen, \
+             den du in diesem Auftrag tatsächlich gemacht hast, nicht auf einer Vermutung, \
+             wie es in so einem Projekt vermutlich aussieht. Stammt eine Angabe aus deinem \
+             Gedächtnis statt aus einer frischen Prüfung, sag das explizit dazu (\"laut \
+             Gedächtnis vom ...\") statt sie als aktuellen Befund auszugeben. Lieber wenige \
+             belegte Funde als eine vollständig aussehende Liste."
+                .to_string(),
+        );
+
         (!teile.is_empty()).then(|| teile.join("\n\n"))
     }
 
@@ -262,6 +285,12 @@ impl Agent {
                 // Kontext kürzen, wenn nötig (Schutz vor Provider-Limit).
         nachrichten_kuerzen(&mut nachrichten);
         let tool_defs: Vec<_> = self.tools.values().map(|t| t.definition()).collect();
+
+        // Schon einmal nachgehakt, weil eine Antwort nur eine Ankündigung
+        // oder Rückfrage ohne Werkzeugaufruf war? Höchstens einmal pro
+        // Auftrag - sonst riskiert ein Modell, das die Regel partout nicht
+        // befolgt, eine Endlosschleife statt eines klaren Abbruchs.
+        let mut wegen_ankuendigung_nachgehakt = false;
 
         for turn in 0..self.max_turns {
             // Jede Runde hängt Assistant- und ToolResults-Nachrichten an -
@@ -343,6 +372,25 @@ impl Agent {
                     tool_calls: antwort.tool_calls,
                 });
                 nachrichten.push(Message::ToolResults(ergebnisse));
+            } else if !wegen_ankuendigung_nachgehakt && ist_ankuendigung_ohne_ausfuehrung(&antwort.text) {
+                // Text sagt "mache ich jetzt" oder "soll ich das umsetzen?",
+                // aber es kam kein Werkzeugaufruf - genau das Muster hinter
+                // "kündigt an, macht aber nichts". Statt das als fertig zu
+                // werten, einmal nachhaken und dem Modell die Chance geben,
+                // die Ankündigung im selben Auftrag tatsächlich einzulösen.
+                wegen_ankuendigung_nachgehakt = true;
+                nachrichten.push(Message::Assistant {
+                    text: antwort.text,
+                    tool_calls: Vec::new(),
+                });
+                nachrichten.push(Message::User(
+                    "Du hast angekündigt, etwas zu tun, oder gefragt, ob du es tun sollst - \
+                     aber keinen Werkzeugaufruf gemacht. Führ es jetzt in diesem Zug \
+                     tatsächlich mit den passenden Werkzeugen aus, oder erklär konkret, \
+                     woran es hakt. Frag nicht erneut nach, außer es geht um Force-Push \
+                     oder einen sensiblen Pfad."
+                        .to_string(),
+                ));
             } else {
                 // Keine Werkzeuge mehr: das war die finale Antwort.
                 nachrichten.push(Message::Assistant {
@@ -514,6 +562,40 @@ fn nachrichten_kuerzen(nachrichten: &mut Vec<Message>) {
     }
 }
 
+/// Erkennt, ob eine text-only-Antwort eine Ankündigung oder Rückfrage ist,
+/// ohne dass im selben Zug tatsächlich etwas ausgeführt wurde.
+///
+/// Bewusst konservativ (wenige, eindeutige Formulierungen): eine
+/// Falscherkennung würde eine echte fertige Antwort um einen Zug verlängern,
+/// das ist der billigere Fehler als das eigentliche Problem - eine
+/// Ankündigung, die als Abschluss durchgeht - ungefangen zu lassen.
+fn ist_ankuendigung_ohne_ausfuehrung(text: &str) -> bool {
+    let t = text.to_lowercase();
+    const MUSTER: &[&str] = &[
+        "setze ich um",
+        "setze ich das um",
+        "setze ich jetzt um",
+        "mache ich jetzt",
+        "mache ich gleich",
+        "mache ich direkt",
+        "werde ich jetzt",
+        "werde ich gleich",
+        "werde ich direkt",
+        "kümmere ich mich jetzt",
+        "kümmere ich mich gleich",
+        "kümmere mich jetzt darum",
+        "kümmere mich darum",
+        "soll ich das umsetzen",
+        "soll ich das machen",
+        "soll ich das tun",
+        "soll ich es umsetzen",
+        "soll ich es machen",
+        "darf ich das umsetzen",
+        "darf ich das machen",
+    ];
+    MUSTER.iter().any(|m| t.contains(m))
+}
+
 fn json_herausschneiden(text: &str) -> Option<String> {
     let start = text.find('{')?;
     let ende = text.rfind('}')?;
@@ -522,7 +604,32 @@ fn json_herausschneiden(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{json_herausschneiden, kuerzen};
+    use super::{ist_ankuendigung_ohne_ausfuehrung, json_herausschneiden, kuerzen};
+
+    #[test]
+    fn erkennt_ankuendigung_ohne_ausfuehrung() {
+        let faelle = [
+            "Setze ich um.",
+            "Mache ich jetzt.",
+            "Soll ich das umsetzen?",
+            "Klar, kümmere mich jetzt darum.",
+        ];
+        for fall in faelle {
+            assert!(ist_ankuendigung_ohne_ausfuehrung(fall), "sollte erkannt werden: {fall}");
+        }
+    }
+
+    #[test]
+    fn echte_abschluss_antwort_wird_nicht_faelschlich_erkannt() {
+        let faelle = [
+            "Fertig - die Datei ist angelegt und der Test läuft grün.",
+            "Ich habe den Bug in Zeile 42 gefixt.",
+            "Das kann ich nicht automatisch prüfen, ohne einen Netzwerkaufruf zu machen.",
+        ];
+        for fall in faelle {
+            assert!(!ist_ankuendigung_ohne_ausfuehrung(fall), "sollte NICHT erkannt werden: {fall}");
+        }
+    }
 
     #[test]
     fn findet_json_trotz_geplauder() {
