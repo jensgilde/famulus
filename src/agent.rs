@@ -12,6 +12,10 @@ use std::sync::Arc;
 /// Wie viele Zeichen eines Werkzeug-Ergebnisses in den Kontext dürfen.
 const MAX_ERGEBNIS_ZEICHEN: usize = 8_000;
 
+/// Maximale Zeichen im gesamten Nachrichten-Kontext, bevor gekürzt wird.
+/// Schützt vor Provider-Kontextlimits bei langen Sessions mit max_turns=997.
+const MAX_KONTEXT_ZEICHEN: usize = 128_000;
+
 pub struct Agent {
     provider: Box<dyn LlmProvider>,
     tools: HashMap<String, Box<dyn Tool>>,
@@ -255,6 +259,8 @@ impl Agent {
         let mut nachrichten: Vec<Message> = vorherige_nachrichten.to_vec();
         nachrichten.push(Message::User(auftrag.to_string()));
 
+                // Kontext kürzen, wenn nötig (Schutz vor Provider-Limit).
+        nachrichten_kuerzen(&mut nachrichten);
         let tool_defs: Vec<_> = self.tools.values().map(|t| t.definition()).collect();
 
         for turn in 0..self.max_turns {
@@ -470,6 +476,36 @@ fn kuerzen(text: &str, hoechstens: usize) -> String {
         gesamt - hoechstens,
         &text[fuss_start..]
     )
+}
+
+/// Kürzt Nachrichten, wenn sie das Kontextlimit überschreiten.
+/// Behält den System-Prompt (erste Nachricht) und die letzten Nachrichten.
+fn nachrichten_kuerzen(nachrichten: &mut Vec<Message>) {
+    let gesamt: usize = nachrichten.iter().map(|m| format!("{m:?}").len()).sum();
+    if gesamt <= MAX_KONTEXT_ZEICHEN {
+        return;
+    }
+    let system = nachrichten.first().cloned();
+    let system_len = system.as_ref().map(|m| format!("{m:?}").len()).unwrap_or(0);
+    let budget = MAX_KONTEXT_ZEICHEN.saturating_sub(system_len);
+    let mut hinten_len = 0;
+    let mut keep_idx = nachrichten.len();
+    for (i, m) in nachrichten.iter().enumerate().rev() {
+        if i == 0 && system.is_some() { continue; }
+        let len = format!("{m:?}").len();
+        if hinten_len + len > budget { break; }
+        hinten_len += len;
+        keep_idx = i;
+    }
+    let gekuerzt = nachrichten.len() - keep_idx;
+    if gekuerzt > 0 && system.is_some() {
+        *nachrichten = {
+            let mut v = vec![system.expect("System-Prompt muss da sein, wenn wir kürzen")];
+            v.extend(nachrichten.drain(keep_idx..));
+            v
+        };
+        eprintln!("[agent] Kontext gekürzt: {gekuerzt} ältere Nachrichten entfernt, {hinten_len} Zeichen behalten");
+    }
 }
 
 fn json_herausschneiden(text: &str) -> Option<String> {

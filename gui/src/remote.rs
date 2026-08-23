@@ -848,8 +848,18 @@ pub async fn mac_tailscale_ip() -> String {
 
     // Erst DNS-Auflösung, Fallback auf hartcodierte IP.
     if let Ok(addr) = tokio::net::lookup_host(format!("{HOSTNAME}:{SERVER_PORT}")).await {
+        let mut v4: Option<String> = None;
+        let mut v6: Option<String> = None;
         for a in addr {
-            return a.ip().to_string();
+            if a.is_ipv4() {
+                v4 = Some(a.ip().to_string());
+            } else if v6.is_none() {
+                v6 = Some(a.ip().to_string());
+            }
+        }
+        // IPv4 zuerst, fällt nur auf IPv6 zurück, wenn kein IPv4 da ist.
+        if let Some(ip) = v4.or(v6) {
+            return ip;
         }
     }
     "100.70.211.30".to_string()

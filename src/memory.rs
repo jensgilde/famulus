@@ -81,13 +81,6 @@ impl Gedaechtnis {
                 quelle   TEXT,
                 erstellt TEXT NOT NULL DEFAULT (datetime('now','localtime'))
             );
-            CREATE TABLE IF NOT EXISTS auftraege (
-                id        INTEGER PRIMARY KEY,
-                auftrag   TEXT NOT NULL,
-                ergebnis  TEXT,
-                erfolg    INTEGER NOT NULL,
-                zeitpunkt TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-            );
             ",
         )?;
 

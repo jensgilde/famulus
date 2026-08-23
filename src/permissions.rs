@@ -19,6 +19,8 @@ use std::path::{Path, PathBuf};
 pub enum Decision {
     Allow,
     Deny,
+    /// Dürfte nur mit Rückfrage – das Modell MUSS vorher bestätigen.
+    Ask,
 }
 
 pub struct PermissionManager {
@@ -37,6 +39,19 @@ impl PermissionManager {
                 .map(|p| resolve_for_check(&expand_home(p)))
                 .collect(),
         }
+    }
+
+    /// Prüft, ob ein Pfad eine Rückfrage erfordert (Force-Push, Secret-Pfade).
+    /// Diese Check geschieht zusätzlich zu check_path – auch erlaubte Pfade
+    /// können eine Ask-Entscheidung auslösen.
+    pub fn check_ask(&self, path: &Path) -> Decision {
+        let candidate = resolve_for_check(path);
+        let s = candidate.to_string_lossy();
+        // Sensible Pfade, die IMMER eine Rückfrage erfordern.
+        if s.contains("/.ssh/") || s.contains("/.gnupg/") || s.contains("/.aws/") || s.contains("/.password-store/") {
+            return Decision::Ask;
+        }
+        Decision::Allow
     }
 
     /// Prüft, ob ein Dateipfad angefasst werden darf.

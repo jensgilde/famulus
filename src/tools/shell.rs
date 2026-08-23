@@ -31,6 +31,11 @@ impl Tool for ShellTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("'command' fehlt"))?;
 
+        // Force-Push erkennen: IMMER Rückfrage, bevor der Befehl ausgeführt wird.
+        if command.contains("push --force") || command.contains("push -f") {
+            return Ok("RÜCKFRAGE ERFORDERLICH: Dieser Befehl enthält einen Force-Push. Frage den Nutzer vor der Ausführung um Erlaubnis. Führe den Befehl erst aus, wenn der Nutzer ausdrücklich zustimmt.".to_string());
+        }
+
         // Kein Pfad, keine Prüfung: Shell-Befehle laufen ungefiltert.
         // `deny_paths` greift hier NICHT - wer den Zugriff auf ein
         // Verzeichnis wirklich verhindern will, kommt an run_shell nicht

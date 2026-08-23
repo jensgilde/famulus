@@ -21,7 +21,18 @@ fn pruefen(permissions: &PermissionManager, path: &Path, path_str: &str) -> anyh
         Decision::Deny => {
             anyhow::bail!("Zugriff verweigert: '{path_str}' liegt in einem gesperrten Verzeichnis.")
         }
-        Decision::Allow => Ok(()),
+        Decision::Ask => {
+            anyhow::bail!("RÜCKFRAGE ERFORDERLICH: Der Pfad '{path_str}' betrifft sensible Daten. Frage den Nutzer vor dem Zugriff um Erlaubnis.")
+        }
+        Decision::Allow => {
+            // Zusätzliche Ask-Prüfung für sensible Pfade.
+            match permissions.check_ask(path) {
+                Decision::Ask => {
+                    anyhow::bail!("RÜCKFRAGE ERFORDERLICH: Der Pfad '{path_str}' betrifft sensible Daten (~/.ssh, ~/.gnupg, ~/.aws, ~/.password-store). Frage den Nutzer vor dem Zugriff um Erlaubnis.")
+                }
+                _ => Ok(()),
+            }
+        }
     }
 }
 
@@ -102,6 +113,9 @@ impl Tool for WriteFileTool {
         let path = expand_home(path_str);
         pruefen(permissions, &path, path_str)?;
 
+        if let Some(eltern) = path.parent() {
+            tokio::fs::create_dir_all(eltern).await?;
+        }
         tokio::fs::write(&path, content).await?;
         Ok(format!(
             "Geschrieben: {path_str} ({} Zeichen)",

@@ -69,7 +69,7 @@ impl Tool for SelbstmodellTool {
         };
 
         // CHANGELOG lesen (liegt neben der Binary, also im Projektordner)
-        let changelog = self.read_changelog();
+        let changelog = self.read_changelog().await;
 
         // ── Selbstbeschreibung generieren ───────────────────────────
         let mut text = String::new();
@@ -131,7 +131,7 @@ impl Tool for SelbstmodellTool {
 
         // ── In den Vault schreiben ──────────────────────────────────
         let pfad = self.vault_pfad.join("Wer-ist-Famulus.md");
-        std::fs::write(&pfad, &text)?;
+        tokio::fs::write(&pfad, &text).await?;
 
         let id_len = if neue_erkenntnis.is_empty() {
             "Selbstmodell aktualisiert"
@@ -145,7 +145,7 @@ impl Tool for SelbstmodellTool {
 }
 
 impl SelbstmodellTool {
-    fn read_changelog(&self) -> String {
+    async fn read_changelog(&self) -> String {
         // Das CHANGELOG liegt im Projektordner, nicht im Vault.
         // Wir suchen an den typischen Stellen.
         let kandidaten = vec![
@@ -157,7 +157,7 @@ impl SelbstmodellTool {
         ];
 
         for pfad in &kandidaten {
-            if let Ok(inhalt) = std::fs::read_to_string(pfad) {
+            if let Ok(inhalt) = tokio::fs::read_to_string(pfad).await {
                 // Nur die letzten 5 Versionen nehmen, sonst wird's zu lang.
                 let versionen: Vec<&str> = inhalt
                     .split("## ")

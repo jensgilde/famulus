@@ -6,9 +6,7 @@
 //! bleibt und nicht jedes Mal migriert werden muss, wenn das Frontend
 //! ein neues Feld hinzufügt.
 //!
-//! Die Suche läuft über SQLite LIKE – für ein paar hundert Chat-Sessions
-//! ist das schnell genug. FTS5 wäre erst sinnvoll, wenn die Datenbank auf
-//! tausende Einträge wächst.
+//! Die Suche läuft über FTS5 – konsistent mit der Erinnerungen-Suche.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -50,6 +48,16 @@ impl History {
                 erstellt    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 geaendert   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 archiviert  INTEGER NOT NULL DEFAULT 0
+            );",
+        )?;
+
+        // FTS5-Index für Chat-Suche – konsistent mit der Erinnerungen-Suche.
+        verbindung.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS chats_fts USING fts5(
+                titel,
+                nachrichten,
+                content='chats',
+                content_rowid='id'
             );",
         )?;
 
@@ -104,19 +112,21 @@ impl History {
         Ok(eintraege)
     }
 
-    /// Durchsucht nicht-archivierte Chats nach einem Begriff.
-    /// Sucht in Titel und Nachrichten-Inhalt (LIKE).
+    /// Durchsucht nicht-archivierte Chats nach einem Begriff (FTS5).
     pub fn suche(&self, begriff: &str) -> Result<Vec<ChatEintrag>> {
         let verbindung = self.verbindung.lock().expect("History vergiftet");
-        let muster = format!("%{}%", begriff.replace('%', "\\%").replace('_', "\\_"));
+        // FTS5: Anführungszeichen escapen, dann in doppelte Anführungszeichen.
+        let escaped = begriff.replace('"', "\"\"");
+        let fts_muster = format!("\"{}\"", escaped);
         let mut abfrage = verbindung.prepare(
-            "SELECT id, titel, nachrichten, erstellt, geaendert, archiviert
-             FROM chats
-             WHERE archiviert = 0 AND (titel LIKE ?1 OR nachrichten LIKE ?1)
-             ORDER BY geaendert DESC",
+            "SELECT c.id, c.titel, c.nachrichten, c.erstellt, c.geaendert, c.archiviert
+             FROM chats c
+             JOIN chats_fts fts ON c.id = fts.rowid
+             WHERE c.archiviert = 0 AND chats_fts MATCH ?1
+             ORDER BY rank",
         )?;
         let eintraege = abfrage
-            .query_map([&muster], |zeile| {
+            .query_map([&fts_muster], |zeile| {
                 Ok(ChatEintrag {
                     id: zeile.get(0)?,
                     titel: zeile.get(1)?,

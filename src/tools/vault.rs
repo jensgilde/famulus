@@ -66,6 +66,7 @@ fn im_vault(wurzel: &Path, notiz: &str) -> anyhow::Result<PathBuf> {
 fn erlaubt(permissions: &PermissionManager, ziel: &Path) -> anyhow::Result<()> {
     match permissions.check_path(ziel) {
         Decision::Deny => anyhow::bail!("Zugriff verweigert: '{}' ist gesperrt.", ziel.display()),
+        Decision::Ask => anyhow::bail!("RÜCKFRAGE ERFORDERLICH: Der Pfad betrifft sensible Daten."),
         Decision::Allow => Ok(()),
     }
 }
