@@ -246,12 +246,20 @@ impl Agent {
         }
 
         // 5. Arbeitsdisziplin: nicht ankündigen, sondern tun; nicht
-        // ausdenken, sondern belegen. Beides steht hier als eigener Absatz
-        // statt nur im Selbstbild, weil das Selbstbild von SelbstmodellTool
-        // regelmäßig neu geschrieben wird - diese Regel soll unabhängig
-        // davon immer gelten.
+        // ausdenken, sondern belegen; nicht falsch deuten, sondern
+        // durchspielen. Steht hier als eigener Absatz statt nur im
+        // Selbstbild, weil das Selbstbild von SelbstmodellTool regelmäßig
+        // neu geschrieben wird - diese Regel soll unabhängig davon immer
+        // gelten.
+        //
+        // Regel 3 kam dazu, nachdem ein Selbst-Audit zwei Zeilen korrekt
+        // zitierte (agent.rs, nachrichten_kuerzen) und trotzdem beide Male
+        // das Gegenteil dessen behauptete, was der Code tatsächlich tut -
+        // der Schutz-Code, der genau das verhindert hätte, wurde nicht
+        // mitgelesen. Beleg-Pflicht (Regel 2) verhindert Erfundenes, nicht
+        // Fehlinterpretiertes-mit-echtem-Zitat - dafür ist Regel 3 da.
         teile.push(
-            "Zwei feste Regeln für deine Arbeitsweise:\n\
+            "Drei feste Regeln für deine Arbeitsweise:\n\
              1. Kündige eine Aktion nie als letzte Nachricht eines Zuges an, ohne sie im \
              selben Zug per Werkzeugaufruf auszuführen. \"Mache ich jetzt\" oder \"Soll ich \
              das umsetzen?\" ohne begleitenden Werkzeugaufruf ist kein gültiger Abschluss - \
@@ -264,7 +272,17 @@ impl Agent {
              wie es in so einem Projekt vermutlich aussieht. Stammt eine Angabe aus deinem \
              Gedächtnis statt aus einer frischen Prüfung, sag das explizit dazu (\"laut \
              Gedächtnis vom ...\") statt sie als aktuellen Befund auszugeben. Lieber wenige \
-             belegte Funde als eine vollständig aussehende Liste."
+             belegte Funde als eine vollständig aussehende Liste.\n\
+             3. Ein Zitat ist kein Beweis für deine Deutung davon, nur dafür, dass du die \
+             Zeile gesehen hast. Bevor du einen Bug als kritisch oder mittelschwer einstufst: \
+             spiel ihn mit konkreten Beispielwerten Zeile für Zeile durch die zitierte \
+             Funktion durch, inklusive der Stellen, die den Fehler verhindern könnten (Guards, \
+             frühe Returns, Schutz-Code) - nicht nur der Stelle, die ihn zu belegen scheint. \
+             Wo möglich, führ die Behauptung tatsächlich aus (Wegwerf-Test, kleines \
+             Reproduktionsskript) statt sie nur zu lesen und zu schlussfolgern - Ausführen \
+             beweist, Lesen interpretiert nur. Ohne einen durchgespielten oder ausgeführten \
+             Nachweis: der Fund ist \"möglich, unverifiziert\", niemals kritisch oder \
+             mittelschwer eingestuft."
                 .to_string(),
         );
 
