@@ -88,6 +88,8 @@ mod tests {
             max_erinnerungen: 12,
             reflexion: false,
             deny_paths: deny,
+            modell_modus: "manuell".to_string(),
+            guenstiges_modell: None,
         }
     }
 

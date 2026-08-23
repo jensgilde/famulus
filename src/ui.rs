@@ -20,6 +20,11 @@ pub enum AgentEvent {
     Gemmerkt { kategorie: String, inhalt: String },
     /// Der Rückblick läuft (Notizbuch-Konsolidierung).
     Reflektiere,
+    /// Welches Modell für diesen Auftrag läuft - bei automatischer
+    /// Modellwahl kann sich das von Auftrag zu Auftrag ändern, deshalb ein
+    /// eigenes Ereignis statt eines einmaligen Konfigurationswerts. Damit
+    /// eine Fehleinschätzung sofort sichtbar ist, nicht lautlos bleibt.
+    ModellGewaehlt { provider: String, model: String, grund: String },
     /// Der Auftrag ist fertig (finale Antwort wurde schon via Text gesendet).
     Fertig,
     /// Der Auftrag ist abgebrochen (Fehler oder Limit erreicht).
@@ -64,6 +69,9 @@ impl Ui for TerminalUi {
             }
             AgentEvent::Reflektiere => {
                 println!("{}", "  ⟳ Rückblick...".dimmed());
+            }
+            AgentEvent::ModellGewaehlt { provider, model, grund } => {
+                println!("{}", format!("  ◆ {provider}: {model} ({grund})").dimmed());
             }
             AgentEvent::Fertig => {
                 println!("\n{}", "✔ Fertig".green().bold());
@@ -116,6 +124,14 @@ mod tests {
                 "gemmerkt",
             ),
             (AgentEvent::Reflektiere, "reflektiere"),
+            (
+                AgentEvent::ModellGewaehlt {
+                    provider: "hyper".into(),
+                    model: "deepseek-v4-flash".into(),
+                    grund: "automatisch".into(),
+                },
+                "modell_gewaehlt",
+            ),
             (AgentEvent::Fertig, "fertig"),
             (
                 AgentEvent::Abgebrochen {
@@ -149,5 +165,15 @@ mod tests {
         })
         .unwrap();
         assert_eq!(json["chunk"], "hallo");
+
+        let json = serde_json::to_value(AgentEvent::ModellGewaehlt {
+            provider: "hyper".into(),
+            model: "deepseek-v4-flash".into(),
+            grund: "automatisch".into(),
+        })
+        .unwrap();
+        assert_eq!(json["provider"], "hyper");
+        assert_eq!(json["model"], "deepseek-v4-flash");
+        assert_eq!(json["grund"], "automatisch");
     }
 }

@@ -35,6 +35,8 @@ enum RemoteRequest {
     Modelle { provider: String },
     #[serde(rename = "setze_modell")]
     SetzeModell { provider: String, model: String },
+    #[serde(rename = "setze_modell_modus")]
+    SetzeModellModus { modus: String },
     #[serde(rename = "version")]
     Version,
     #[serde(rename = "presets_liste")]
@@ -190,6 +192,16 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                         }
                     }
                 }
+                RemoteRequest::SetzeModellModus { modus } => {
+                    match setze_modell_modus_ermitteln(&modus) {
+                        Ok(z) => {
+                            let _ = send_response(&tx, &RemoteResponse::Zustand { zustand: z }).await;
+                        }
+                        Err(e) => {
+                            let _ = send_error(&tx, &e).await;
+                        }
+                    }
+                }
                 RemoteRequest::Version => {
                     let v = env!("CARGO_PKG_VERSION").to_string();
                     let _ = send_response(&tx, &RemoteResponse::Version { version: v }).await;
@@ -314,12 +326,24 @@ async fn client_betreuen(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
 
 fn zustand_ermitteln() -> Result<String, String> {
     let config = Config::load().map_err(|e| format!("{e:#}"))?;
-    Ok(format!(
-        "{} · {} · max. {} Schritte",
-        config.provider,
-        config.model.unwrap_or_else(|| "Standardmodell".to_string()),
-        config.max_turns
-    ))
+    Ok(zustand_text(&config))
+}
+
+/// Dieselbe Statuszeile wie `crate::zustand_text` in lib.rs - hier separat,
+/// weil der Server-Pfad (iPad-Anfragen) eigene Ermitteln-Funktionen hat,
+/// die nicht als Tauri-Commands laufen und die lib.rs-Version deshalb nicht
+/// direkt aufrufen können.
+fn zustand_text(config: &Config) -> String {
+    let modell_teil = if config.modell_modus == "automatisch" {
+        "automatisch (Famulus wählt)".to_string()
+    } else {
+        format!(
+            "{} · {}",
+            config.provider,
+            config.model.clone().unwrap_or_else(|| "Standardmodell".to_string())
+        )
+    };
+    format!("{modell_teil} · max. {} Schritte", config.max_turns)
 }
 
 async fn credits_ermitteln() -> Result<String, String> {
@@ -468,12 +492,43 @@ async fn setze_modell_ermitteln(provider: &str, model: &str) -> Result<String, S
     if let Some(table) = config.as_table_mut() {
         table.insert("provider".to_string(), toml::Value::String(provider.to_string()));
         table.insert("model".to_string(), toml::Value::String(model.to_string()));
+        // Wie lokal (siehe setze_modell in lib.rs): eine konkrete Wahl vom
+        // iPad aus überschreibt "automatisch".
+        table.insert("modell_modus".to_string(), toml::Value::String("manuell".to_string()));
     }
 
     std::fs::write(&pfad, toml::to_string(&config).map_err(|e| format!("toml schreiben fehlgeschlagen: {e}"))?)
         .map_err(|e| format!("Datei schreiben fehlgeschlagen: {e}"))?;
 
     Ok(format!("{provider} · {model}"))
+}
+
+/// Schaltet zwischen manueller und automatischer Modellwahl um - Gegenstück
+/// zu `setze_modell_modus` in lib.rs für den Server-Pfad (iPad-Anfragen).
+fn setze_modell_modus_ermitteln(modus: &str) -> Result<String, String> {
+    if modus != "manuell" && modus != "automatisch" {
+        return Err(format!("Unbekannter Modell-Modus: '{modus}'"));
+    }
+
+    let pfad = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".famulus")
+        .join("famulus.toml");
+
+    let mut config: toml::Value = std::fs::read_to_string(&pfad)
+        .map_err(|e| format!("famulus.toml nicht lesbar: {e}"))?
+        .parse()
+        .map_err(|e| format!("famulus.toml kein gültiges TOML: {e}"))?;
+
+    if let Some(table) = config.as_table_mut() {
+        table.insert("modell_modus".to_string(), toml::Value::String(modus.to_string()));
+    }
+
+    std::fs::write(&pfad, toml::to_string(&config).map_err(|e| format!("toml schreiben fehlgeschlagen: {e}"))?)
+        .map_err(|e| format!("Datei schreiben fehlgeschlagen: {e}"))?;
+
+    let config = Config::load().map_err(|e| format!("{e:#}"))?;
+    Ok(zustand_text(&config))
 }
 
 
@@ -742,6 +797,37 @@ pub async fn client_setze_modell(server_ip: &str, provider: &str, model: &str) -
     let (mut tx, mut rx) = ws.split();
 
     let request = RemoteRequest::SetzeModell { provider: provider.to_string(), model: model.to_string() };
+    let json = serde_json::to_string(&request).map_err(|e| format!("JSON-Fehler: {e}"))?;
+    tx.send(WsMsg::Text(json.into()))
+        .await
+        .map_err(|e| format!("Sende-Fehler: {e}"))?;
+
+    if let Some(msg) = rx.next().await {
+        let msg = msg.map_err(|e| format!("Empfangs-Fehler: {e}"))?;
+        if let WsMsg::Text(text) = msg {
+            match serde_json::from_str::<RemoteResponse>(&text) {
+                Ok(RemoteResponse::Zustand { zustand }) => return Ok(zustand),
+                Ok(RemoteResponse::Error { fehler }) => return Err(fehler),
+                _ => return Err("Unerwartete Antwort vom Server".to_string()),
+            }
+        }
+    }
+
+    Err("Keine Antwort vom Server".to_string())
+}
+
+/// Schaltet die Modellwahl auf dem Mac zwischen manuell und automatisch um.
+pub async fn client_setze_modell_modus(server_ip: &str, modus: &str) -> Result<String, String> {
+    let url = format!("ws://{server_ip}:{SERVER_PORT}");
+
+    let (ws, _) = tokio::time::timeout(VERBINDUNGS_TIMEOUT, tokio_tungstenite::connect_async(&url))
+        .await
+        .map_err(|_| format!("Zeitüberschreitung: Keine Verbindung zu {url}."))?
+        .map_err(|e| format!("Keine Verbindung: {e}"))?;
+
+    let (mut tx, mut rx) = ws.split();
+
+    let request = RemoteRequest::SetzeModellModus { modus: modus.to_string() };
     let json = serde_json::to_string(&request).map_err(|e| format!("JSON-Fehler: {e}"))?;
     tx.send(WsMsg::Text(json.into()))
         .await

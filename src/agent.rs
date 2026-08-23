@@ -18,6 +18,15 @@ const MAX_KONTEXT_ZEICHEN: usize = 128_000;
 
 pub struct Agent {
     provider: Box<dyn LlmProvider>,
+    /// Modellname zu `provider`, nur für die Anzeige (AgentEvent::ModellGewaehlt).
+    provider_modell: String,
+    /// Zweites Modell für die automatische Modellwahl, falls konfiguriert -
+    /// siehe `Config::guenstiges_modell`. `None` heißt: keins eingetragen,
+    /// `automatische_modellwahl` bleibt dann wirkungslos, egal was in
+    /// `modell_modus` steht.
+    guenstig: Option<Box<dyn LlmProvider>>,
+    guenstig_modell: String,
+    automatische_modellwahl: bool,
     tools: HashMap<String, Box<dyn Tool>>,
     permissions: PermissionManager,
     ui: Arc<dyn Ui>,
@@ -112,8 +121,31 @@ impl Agent {
             tools.insert(selbstmodell.definition().name.clone(), selbstmodell);
         }
 
+        // ── Automatische Modellwahl: zweites Modell bauen, falls
+        // konfiguriert. Ein Fehler dabei (z.B. fehlender API-Key) soll
+        // nicht den ganzen Agenten scheitern lassen - die automatische Wahl
+        // fällt dann einfach auf das Hauptmodell zurück, wie ohne
+        // `guenstiges_modell`.
+        let guenstig = match crate::llm::build_guenstiges_modell(&config) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("[agent] Günstiges Modell nicht verfügbar, bleibe beim Hauptmodell: {e:#}");
+                None
+            }
+        };
+        let guenstig_modell = config
+            .guenstiges_modell
+            .as_ref()
+            .and_then(|g| g.model.clone())
+            .unwrap_or_else(|| "Standardmodell".to_string());
+        let automatische_modellwahl = config.modell_modus == "automatisch";
+
         Self {
             provider,
+            provider_modell: config.model.clone().unwrap_or_else(|| "Standardmodell".to_string()),
+            guenstig,
+            guenstig_modell,
+            automatische_modellwahl,
             tools,
             permissions: PermissionManager::new(&config),
             ui,
@@ -265,7 +297,9 @@ impl Agent {
              das umsetzen?\" ohne begleitenden Werkzeugaufruf ist kein gültiger Abschluss - \
              ein Auftrag ist nicht fertig, nur weil du sagst, dass er fertig ist. \
              Nachfragen gibt es nur bei den zwei Ausnahmen (Force-Push, sensible Pfade wie \
-             ~/.ssh) - sonst handelst du.\n\
+             ~/.ssh) - sonst handelst du. Ist ein Auftrag kurz oder mehrdeutig formuliert, \
+             klär die Absicht zuerst selbst anhand von Gesprächsverlauf, Gedächtnis und Vault, \
+             bevor du handelst oder nachfragst - das ersetzt einen extra Formulierungsschritt.\n\
              2. Jede Tatsachenbehauptung über Code, Dateien oder Konfiguration - besonders \
              bei Audits, Fehlersuche oder Reviews - muss auf einem Werkzeugaufruf beruhen, \
              den du in diesem Auftrag tatsächlich gemacht hast, nicht auf einer Vermutung, \
@@ -297,6 +331,40 @@ impl Agent {
     ) -> anyhow::Result<()> {
         let system = self.systemvorspann(auftrag).await;
 
+        // ── Automatische Modellwahl ──────────────────────────────────
+        // Einmal pro Auftrag entscheiden, nicht pro Zug: ein Wechsel
+        // mitten im Auftrag würde den Prompt-Cache des bisherigen
+        // Providers verwerfen und wäre für Jens nicht nachvollziehbar,
+        // welches Modell gerade "das Gespräch führt". Regelbasiert statt
+        // über einen weiteren Modellaufruf - genau die Latenz, die die
+        // automatische Wahl eigentlich sparen soll, würde ein Klassifizierungs-
+        // Aufruf wieder auffressen.
+        let provider: &dyn LlmProvider = match (&self.guenstig, self.automatische_modellwahl) {
+            (Some(guenstig), true) if ist_einfacher_auftrag(auftrag) => {
+                self.ui.ereignis(AgentEvent::ModellGewaehlt {
+                    provider: guenstig.name().to_string(),
+                    model: self.guenstig_modell.clone(),
+                    grund: "automatisch: einfacher Auftrag".to_string(),
+                });
+                guenstig.as_ref()
+            }
+            _ => {
+                if self.automatische_modellwahl {
+                    let grund = if self.guenstig.is_some() {
+                        "automatisch: komplexer Auftrag"
+                    } else {
+                        "automatisch: kein günstiges Modell konfiguriert"
+                    };
+                    self.ui.ereignis(AgentEvent::ModellGewaehlt {
+                        provider: self.provider.name().to_string(),
+                        model: self.provider_modell.clone(),
+                        grund: grund.to_string(),
+                    });
+                }
+                self.provider.as_ref()
+            }
+        };
+
         let mut nachrichten: Vec<Message> = vorherige_nachrichten.to_vec();
         nachrichten.push(Message::User(auftrag.to_string()));
 
@@ -317,8 +385,7 @@ impl Agent {
             // langen Auftrag hinweg einzuhalten.
             nachrichten_kuerzen(&mut nachrichten);
 
-            let antwort = self
-                .provider
+            let antwort = provider
                 .next(system.as_deref(), &nachrichten, &tool_defs)
                 .await?;
 
@@ -614,6 +681,35 @@ fn ist_ankuendigung_ohne_ausfuehrung(text: &str) -> bool {
     MUSTER.iter().any(|m| t.contains(m))
 }
 
+/// Regelbasierte Einschätzung, ob ein Auftrag ohne das Premium-Modell
+/// auskommt - für die automatische Modellwahl (`Config::modell_modus`).
+///
+/// Bewusst konservativ: im Zweifel gilt ein Auftrag als komplex. Eine
+/// Fehleinschätzung nach "einfach" verschlechtert lautlos die Antwort-
+/// qualität - genau das Muster, das in dieser Codebase schon mehrfach
+/// wehgetan hat, wenn es unbemerkt blieb. Eine Fehleinschätzung nach
+/// "komplex" kostet nur ein paar Cent mehr. Kein zusätzlicher Modellaufruf
+/// für die Einschätzung selbst - der würde die Latenz kosten, die die
+/// automatische Wahl eigentlich sparen soll.
+fn ist_einfacher_auftrag(auftrag: &str) -> bool {
+    const KOMPLEX_SIGNALE: &[&str] = &[
+        "code", "bug", "fehler", " fix", "review", "refactor", "implementier",
+        "programmier", "funktion", "script", "skript", "debug", "css", "html",
+        "rust", "python", "javascript", "typescript", "sql", " api", "git ",
+        "commit", "architektur", "analysier", "audit", "sicherheit",
+        "security", "installier", "build", "kompilier", "test", "shell",
+        "config", "konfig", "vault", "gedächtnis", "gedaechtnis", "datenbank",
+        "sql", "schreib mir ein", "erstelle ein", "baue ein",
+    ];
+    let t = format!(" {} ", auftrag.to_lowercase());
+    if KOMPLEX_SIGNALE.iter().any(|w| t.contains(w)) {
+        return false;
+    }
+    // Auch ohne Komplex-Signal gilt: ab einer gewissen Länge steckt meist
+    // mehr als eine einfache Frage dahinter - im Zweifel Premium.
+    auftrag.chars().count() <= 160
+}
+
 fn json_herausschneiden(text: &str) -> Option<String> {
     let start = text.find('{')?;
     let ende = text.rfind('}')?;
@@ -622,7 +718,38 @@ fn json_herausschneiden(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ist_ankuendigung_ohne_ausfuehrung, json_herausschneiden, kuerzen};
+    use super::{ist_ankuendigung_ohne_ausfuehrung, ist_einfacher_auftrag, json_herausschneiden, kuerzen};
+
+    #[test]
+    fn erkennt_einfache_aufträge() {
+        let faelle = [
+            "Wie spät ist es in Tokio?",
+            "Fass mir das kurz zusammen.",
+            "Was bedeutet FTS5?",
+        ];
+        for fall in faelle {
+            assert!(ist_einfacher_auftrag(fall), "sollte als einfach gelten: {fall}");
+        }
+    }
+
+    #[test]
+    fn komplexe_signale_verhindern_einfach_einstufung() {
+        let faelle = [
+            "Fix den Bug in agent.rs",
+            "Schreib mir ein Rust-Skript, das Dateien sortiert",
+            "Review den letzten Commit",
+            "Analysier die Sicherheit von permissions.rs",
+        ];
+        for fall in faelle {
+            assert!(!ist_einfacher_auftrag(fall), "sollte NICHT als einfach gelten: {fall}");
+        }
+    }
+
+    #[test]
+    fn im_zweifel_gilt_lang_als_komplex() {
+        let lang = "x".repeat(200);
+        assert!(!ist_einfacher_auftrag(&lang));
+    }
 
     #[test]
     fn erkennt_ankuendigung_ohne_ausfuehrung() {

@@ -279,3 +279,24 @@ pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn 
 
     Ok(Box::new(router::RouterProvider::new(providers)))
 }
+
+/// Baut das "günstige" Modell für die automatische Modellwahl, falls in
+/// `famulus.toml` eines eingetragen ist. Separat von `build_provider`, weil
+/// es kein Fallback-Ziel ist (der Router wechselt nur bei einem Fehler
+/// dorthin) - es ist eine bewusste, aufgabenabhängige Alternative, die
+/// `agent.rs` selbst auswählt, nicht der Router.
+pub fn build_guenstiges_modell(config: &crate::config::Config) -> anyhow::Result<Option<Box<dyn LlmProvider>>> {
+    let Some(guenstig) = &config.guenstiges_modell else {
+        return Ok(None);
+    };
+    let timeout = Duration::from_secs(config.timeout_sekunden);
+    let provider = build_single_provider(
+        &guenstig.provider,
+        guenstig.model.clone(),
+        None,
+        None,
+        config.max_antwort_tokens,
+        timeout,
+    )?;
+    Ok(Some(provider))
+}

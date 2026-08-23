@@ -178,12 +178,24 @@ fn kanal_steht() {
 #[tauri::command]
 fn zustand() -> Result<String, String> {
     let config = Config::load().map_err(|e| format!("{e:#}"))?;
-    Ok(format!(
-        "{} · {} · max. {} Schritte",
-        config.provider,
-        config.model.unwrap_or_else(|| "Standardmodell".to_string()),
-        config.max_turns
-    ))
+    Ok(zustand_text(&config))
+}
+
+/// Baut die kurze Statuszeile ("hyper · deepseek-v4-pro · max. 997
+/// Schritte"), an drei Stellen gebraucht (Start, nach `setze_modell`, nach
+/// `setze_modell_modus`) - daher als eigene Funktion statt dreimal
+/// dasselbe `format!`.
+fn zustand_text(config: &Config) -> String {
+    let modell_teil = if config.modell_modus == "automatisch" {
+        "automatisch (Famulus wählt)".to_string()
+    } else {
+        format!(
+            "{} · {}",
+            config.provider,
+            config.model.clone().unwrap_or_else(|| "Standardmodell".to_string())
+        )
+    };
+    format!("{modell_teil} · max. {} Schritte", config.max_turns)
 }
 
 #[tauri::command]
@@ -352,6 +364,11 @@ async fn setze_modell(provider: String, model: String) -> Result<String, String>
     if let Some(table) = config.as_table_mut() {
         table.insert("provider".to_string(), toml::Value::String(provider.clone()));
         table.insert("model".to_string(), toml::Value::String(model.clone()));
+        // Ein konkretes Modell von Hand zu wählen ist ein expliziter
+        // Wunsch - überschreibt "automatisch", sonst würde die eigene Wahl
+        // von der automatischen Modellwahl beim nächsten Auftrag wieder
+        // verworfen.
+        table.insert("modell_modus".to_string(), toml::Value::String("manuell".to_string()));
     }
 
     let serialisiert = toml::to_string_pretty(&config)
@@ -361,12 +378,40 @@ async fn setze_modell(provider: String, model: String) -> Result<String, String>
 
     // Das Frontend soll sofort sehen, was jetzt gilt.
     let config = Config::load().map_err(|e| format!("{e:#}"))?;
-    Ok(format!(
-        "{} · {} · max. {} Schritte",
-        config.provider,
-        config.model.unwrap_or_else(|| "Standardmodell".to_string()),
-        config.max_turns
-    ))
+    Ok(zustand_text(&config))
+}
+
+/// Schaltet zwischen manueller und automatischer Modellwahl um. Bei
+/// "automatisch" bleiben `provider`/`model` als Premium-Modell stehen -
+/// die automatische Wahl braucht sie als Vergleichsgröße (siehe
+/// `agent.rs::run_task`).
+#[tauri::command]
+async fn setze_modell_modus(modus: String) -> Result<String, String> {
+    if modus != "manuell" && modus != "automatisch" {
+        return Err(format!("Unbekannter Modell-Modus: '{modus}'"));
+    }
+
+    let config_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".famulus")
+        .join("famulus.toml");
+
+    let mut config: toml::Value = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("famulus.toml lesen fehlgeschlagen: {e}"))?
+        .parse()
+        .map_err(|e| format!("famulus.toml kein gültiges TOML: {e}"))?;
+
+    if let Some(table) = config.as_table_mut() {
+        table.insert("modell_modus".to_string(), toml::Value::String(modus));
+    }
+
+    let serialisiert = toml::to_string_pretty(&config)
+        .map_err(|e| format!("famulus.toml serialisieren fehlgeschlagen: {e}"))?;
+    std::fs::write(&config_path, serialisiert)
+        .map_err(|e| format!("famulus.toml schreiben fehlgeschlagen: {e}"))?;
+
+    let config = Config::load().map_err(|e| format!("{e:#}"))?;
+    Ok(zustand_text(&config))
 }
 
 #[tauri::command]
@@ -439,6 +484,11 @@ async fn remote_modelle_liste(provider: String) -> Result<serde_json::Value, Str
 #[tauri::command]
 async fn remote_setze_modell(provider: String, model: String) -> Result<String, String> {
     remote::client_setze_modell(&remote::mac_tailscale_ip().await, &provider, &model).await
+}
+
+#[tauri::command]
+async fn remote_setze_modell_modus(modus: String) -> Result<String, String> {
+    remote::client_setze_modell_modus(&remote::mac_tailscale_ip().await, &modus).await
 }
 
 // ── Presets ───────────────────────────────────────────────────────────
@@ -656,11 +706,13 @@ pub fn run() {
             credits,
             modelle_liste,
             setze_modell,
+            setze_modell_modus,
             remote_auftrag,
             remote_zustand,
             remote_credits,
             remote_modelle_liste,
             remote_setze_modell,
+            remote_setze_modell_modus,
             presets_liste,
             presets_aktivieren,
             presets_speichern,

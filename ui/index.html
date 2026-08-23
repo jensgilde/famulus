@@ -1128,6 +1128,7 @@ document.getElementById('suchEingabe').addEventListener('input', async function(
 // ── Provider/Modell-Auswahl ──────────────────────────────────────────────
 
 let alleModelle = [];
+let automatischeModellwahl = false;
 
 async function ladeModelle() {
   try {
@@ -1150,12 +1151,34 @@ async function ladeModelle() {
 function renderModelle() {
   const dropdown = document.getElementById('modelDropdown');
   dropdown.innerHTML = '';
+
+  // Erste Option: Famulus entscheidet selbst (regelbasiert, siehe
+  // agent.rs::ist_einfacher_auftrag) statt eines fest gewählten Modells.
+  const auto = document.createElement('div');
+  auto.className = 'model-select-option' + (automatischeModellwahl ? ' active' : '');
+  auto.textContent = '⚙ Automatisch (Famulus wählt)';
+  auto.addEventListener('click', async () => {
+    document.getElementById('modelSelect').classList.remove('open');
+    try {
+      const fn = istIOS ? 'remote_setze_modell_modus' : 'setze_modell_modus';
+      const z = await invoke(fn, { modus: 'automatisch' });
+      automatischeModellwahl = true;
+      zustandEl.textContent = z;
+      document.getElementById('modelTrigger').textContent = 'Automatisch';
+      renderModelle();
+    } catch (e) {
+      zeigeFehlerBanner('Automatische Modellwahl fehlgeschlagen: ' + e);
+    }
+  });
+  dropdown.appendChild(auto);
+
   alleModelle.forEach(m => {
     const div = document.createElement('div');
-    div.className = 'model-select-option' + (m.id === aktuellesModell ? ' active' : '');
+    div.className = 'model-select-option' + (!automatischeModellwahl && m.id === aktuellesModell ? ' active' : '');
     div.textContent = m.id;
     div.addEventListener('click', async () => {
       aktuellesModell = m.id;
+      automatischeModellwahl = false;
       document.getElementById('modelTrigger').textContent = m.id;
       document.querySelectorAll('#modelDropdown .model-select-option').forEach(o => o.classList.remove('active'));
       div.classList.add('active');
@@ -1171,7 +1194,8 @@ function renderModelle() {
     });
     dropdown.appendChild(div);
   });
-  document.getElementById('modelTrigger').textContent = aktuellesModell || 'Modell';
+  document.getElementById('modelTrigger').textContent =
+    automatischeModellwahl ? 'Automatisch' : (aktuellesModell || 'Modell');
 }
 
 // Provider-Dropdown
@@ -1224,6 +1248,12 @@ async function ladeZustand() {
     const fn = istIOS ? 'remote_zustand' : 'zustand';
     const z = await invoke(fn);
     zustandEl.textContent = z;
+    automatischeModellwahl = z.startsWith('automatisch');
+    if (automatischeModellwahl) {
+      document.getElementById('modelTrigger').textContent = 'Automatisch';
+      renderModelle();
+      return;
+    }
     const teile = z.split(' · ');
     if (teile.length >= 2) {
       aktuelleProvider = teile[0];
@@ -1454,6 +1484,13 @@ listen('famulus-ereignis', e => {
     case 'reflektiere':
       aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: '⟳ Rückblick...' });
       renderLiveSchritte();
+      break;
+    case 'modell_gewaehlt':
+      // Bei automatischer Modellwahl kann sich das Modell von Auftrag zu
+      // Auftrag ändern - hier sichtbar machen statt lautlos zu wechseln,
+      // damit eine Fehleinschätzung sofort auffällt.
+      zustandEl.textContent = `${ev.provider} · ${ev.model} · ${ev.grund}`;
+      zustandEl.title = ev.grund;
       break;
     case 'fertig':
       chat.nachrichten.push({ rolle: 'assistant', inhalt: aktuellerDenktText || ev.chunk || '' });

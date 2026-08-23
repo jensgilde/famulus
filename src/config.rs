@@ -54,6 +54,25 @@ pub struct Config {
     /// Nach jedem Auftrag einen Rückblick machen und Erkenntnisse merken.
     #[serde(default = "default_wahr")]
     pub reflexion: bool,
+
+    // ---- Modellwahl ----
+    /// "manuell" (Standard - immer `provider`/`model`) oder "automatisch":
+    /// dann entscheidet der Agent pro Auftrag regelbasiert zwischen
+    /// `provider`/`model` (Premium) und `guenstiges_modell` (siehe unten),
+    /// siehe `agent.rs::ist_einfacher_auftrag`. Ohne konfiguriertes
+    /// `guenstiges_modell` bleibt "automatisch" wirkungslos - es gibt dann
+    /// nichts, wohin ausgewichen werden könnte.
+    #[serde(default = "default_modell_modus")]
+    pub modell_modus: String,
+    /// Das zweite Modell für die automatische Modellwahl. Läuft über
+    /// dieselbe Adresse/denselben Key wie ein Fallback-Provider - daher
+    /// dieselbe Struktur.
+    #[serde(default)]
+    pub guenstiges_modell: Option<FallbackProvider>,
+}
+
+fn default_modell_modus() -> String {
+    "manuell".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]

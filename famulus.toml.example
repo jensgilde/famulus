@@ -58,3 +58,21 @@ max_erinnerungen = 12
 # Nach jedem erfolgreichen Auftrag zurückblicken und Erkenntnisse merken.
 # Kostet einen zusätzlichen Modellaufruf pro Auftrag.
 reflexion = true
+
+# ---- Modellwahl ----
+
+# "manuell" (Standard - immer provider/model oben) oder "automatisch": dann
+# entscheidet Famulus pro Auftrag regelbasiert (kein zusätzlicher Modellaufruf
+# dafür) zwischen provider/model (Premium) und guenstiges_modell unten. Auch
+# per Dropdown in der GUI umschaltbar - diese Einstellung ist nur der Start-
+# wert. Ohne guenstiges_modell bleibt "automatisch" wirkungslos.
+modell_modus = "manuell"
+
+# Das zweite Modell für die automatische Modellwahl - läuft für einfache
+# Aufträge statt provider/model oben. Dieselbe Struktur wie ein
+# [[fallback_providers]]-Block, aber kein Fallback: Famulus wählt bewusst,
+# nicht erst nach einem Fehler.
+#
+# [guenstiges_modell]
+# provider = "hyper"
+# model = "deepseek-v4-flash"
