@@ -99,4 +99,16 @@ codesign --verify --deep --strict --verbose=4 "$DEST"
 echo "==> Starte Famulus..."
 open -a Famulus
 
+# ── iPad/iPhone gleich mitziehen ─────────────────────────────────────
+# Auf Jens' Wunsch: jede Aenderung soll automatisch auf allen drei
+# Geraeten landen, nicht nur auf dem Mac. Eigenes Skript (andere
+# Toolchain, andere Fehlerbilder), deshalb hier nur aufgerufen - und
+# bewusst NICHT mit `set -e` verknuepft: schlaegt der iOS-Teil fehl
+# (Geraet nicht erreichbar, Xcode-Problem), soll das nicht so aussehen,
+# als waere auch die gerade erfolgreich installierte Mac-Version kaputt.
+echo "==> Ziehe iPad/iPhone nach..."
+if ! ./scripts/install-ios.sh; then
+    echo "==> iOS-Install fehlgeschlagen - Mac ist trotzdem aktuell." >&2
+fi
+
 echo "Fertig."
