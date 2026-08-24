@@ -3,7 +3,7 @@ members = ["gui"]
 
 [package]
 name = "famulus-core"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 description = "Famulus: persönlicher KI-Agent mit vollem Rechnerzugriff, austauschbarem LLM-Backend und harten Sicherheitsgrenzen."
 
@@ -24,8 +24,11 @@ tokio = { version = "1", default-features = false, features = [
     "fs",               # Dateien lesen/schreiben
     "process",          # run_shell
     "io-util",          # begrenztes Lesen grosser Dateien
+    "time",             # Inaktivitaets-Timeout beim Lesen von Antwort-Stuecken
 ] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+bytes = "1"  # Chunk-Typ der gestreamten LLM-Antwort
+futures-util = "0.3"  # StreamExt für die gestreamte LLM-Antwort
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

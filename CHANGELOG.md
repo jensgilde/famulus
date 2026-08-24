@@ -5,6 +5,25 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] – 2026-08-24
+
+### Geändert
+- **Streaming für den Anthropic-/Hyper-Provider**: Antworten werden jetzt
+  Stück für Stück gelesen statt als Ganzes abgewartet. Der 300-Sekunden-
+  Timeout gilt nicht mehr für die gesamte Antwort, sondern als
+  Inaktivitätsgrenze: Solange Daten fließen, darf die Antwort beliebig
+  lange dauern. Damit stirbt kein Auftrag mehr mit
+  „operation timed out“ an langen, aber gesunden Antworten.
+- Eigener HTTP-Client ohne Gesamt-Timeout für den Streaming-Pfad
+  (`http_client_ohne_gesamttimeout`); der Verbindungsaufbau bleibt über
+  `connect_timeout` (20 s) begrenzt.
+
+### Neu getestet
+- 6 Unit-Tests für den SSE-Parser: Text-Deltas, thinking-Blöcke (werden
+  ignoriert), Ereignis zerlegt über Paketgrenzen, Tool-Aufrufe aus
+  JSON-Fragmenten, Tool ohne Argumente, Abbruch bei fehlendem
+  `message_stop` und bei stockendem Strom.
+
 ## [0.8.0] – 2026-08-23
 
 ### Hinzugefügt

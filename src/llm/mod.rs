@@ -152,6 +152,22 @@ fn http_client(timeout: Duration) -> anyhow::Result<reqwest::Client> {
         .build()?)
 }
 
+/// Wie `http_client`, aber bewusst OHNE Gesamt-Timeout - für Antworten, die
+/// gestreamt werden. Dort würde die globale Grenze genau den Fehler wieder
+/// einführen, den das Streaming behebt: eine lange Antwort stirbt nach
+/// `timeout` Sekunden, egal wie fleißig der Anbieter Tokens liefert. Der
+/// Verbindungsaufbau bleibt über `connect_timeout` begrenzt, danach übernimmt
+/// die Inaktivitäts-Wache des Providers (in `anthropic.rs::antwort_aus_strom`):
+/// Jedes gelesene Stück muss innerhalb derselben `timeout`-Zeit eintreffen,
+/// sonst wird abgebrochen. "Der Dienst hängt" und "die Antwort ist lang"
+/// sind damit sauber getrennt.
+fn http_client_ohne_gesamttimeout() -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(20))
+        .pool_idle_timeout(Duration::from_secs(15))
+        .build()?)
+}
+
 /// Schickt eine Anfrage ab und wiederholt sie einmal, wenn der Fehler nach
 /// einer toten Pool-Verbindung aussieht.
 ///
