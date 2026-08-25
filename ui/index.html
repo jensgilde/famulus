@@ -1636,6 +1636,32 @@ listen('famulus-ereignis', e => {
       aktuellerAgentSchritte.push({ art: 'gedaechtnis', text: '⟳ Rückblick...' });
       renderLiveSchritte();
       break;
+    case 'zwischenfrage_antwort':
+      // Eigene, sofortige Antwort aus einem parallelen Aufruf - kommt NICHT
+      // aus dem laufenden Hauptauftrag (der läuft unbeeinflusst weiter,
+      // deshalb hier kein beschaeftigt(false)). Als fertige Chat-Nachricht
+      // statt als Live-Schritt, damit sie klar von der Aufgaben-Erzählung
+      // getrennt bleibt und nicht verschwindet, wenn der Hauptauftrag den
+      // Live-Block irgendwann räumt.
+      chat.nachrichten.push({
+        rolle: 'assistant',
+        inhalt: `↩ Zu „${ev.frage}":\n\n${ev.text}`,
+        zeitstempel: Date.now(),
+      });
+      speichereChats();
+      renderAlles();
+      break;
+    case 'warte':
+      // Ein Zug ist fehlgeschlagen, wird aber automatisch wiederholt statt
+      // den Auftrag abzubrechen (siehe agent.rs::rufe_mit_wiederaufsetzen).
+      // Als Schritt statt als Fehler-Bubble, weil es (noch) kein Abbruch ist.
+      aktuellerAgentSchritte.push({
+        art: 'gedaechtnis',
+        text: `⏳ Fehlgeschlagen (${ev.versuch}/${ev.max_versuche}), versuche in ${ev.sekunden}s erneut: ${ev.grund}`,
+      });
+      renderLiveSchritte();
+      renderStatusbar();
+      break;
     case 'modell_gewaehlt':
       // Bei automatischer Modellwahl kann sich das Modell von Auftrag zu
       // Auftrag ändern - hier sichtbar machen statt lautlos zu wechseln,

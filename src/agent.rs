@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::llm::{LlmProvider, Message, ToolResult};
+use crate::llm::{LlmAntwort, LlmProvider, Message, ToolDefinition, ToolResult};
 use crate::memory::{Gedaechtnis, ART_FAKT};
 use crate::presets::PresetsConfig;
 use crate::permissions::PermissionManager;
@@ -17,14 +17,17 @@ const MAX_ERGEBNIS_ZEICHEN: usize = 8_000;
 const MAX_KONTEXT_ZEICHEN: usize = 128_000;
 
 pub struct Agent {
-    provider: Box<dyn LlmProvider>,
+    /// `Arc` statt `Box`: eine Zwischenfrage beantwortet ein paralleler,
+    /// unabhängiger Aufruf desselben Providers (siehe `run_task`) - der
+    /// braucht eine eigene, geteilte Referenz, keine exklusive.
+    provider: Arc<dyn LlmProvider>,
     /// Modellname zu `provider`, nur für die Anzeige (AgentEvent::ModellGewaehlt).
     provider_modell: String,
     /// Zweites Modell für die automatische Modellwahl, falls konfiguriert -
     /// siehe `Config::guenstiges_modell`. `None` heißt: keins eingetragen,
     /// `automatische_modellwahl` bleibt dann wirkungslos, egal was in
     /// `modell_modus` steht.
-    guenstig: Option<Box<dyn LlmProvider>>,
+    guenstig: Option<Arc<dyn LlmProvider>>,
     guenstig_modell: String,
     automatische_modellwahl: bool,
     tools: HashMap<String, Box<dyn Tool>>,
@@ -126,8 +129,8 @@ impl Agent {
         // nicht den ganzen Agenten scheitern lassen - die automatische Wahl
         // fällt dann einfach auf das Hauptmodell zurück, wie ohne
         // `guenstiges_modell`.
-        let guenstig = match crate::llm::build_guenstiges_modell(&config) {
-            Ok(g) => g,
+        let guenstig: Option<Arc<dyn LlmProvider>> = match crate::llm::build_guenstiges_modell(&config) {
+            Ok(g) => g.map(Arc::from),
             Err(e) => {
                 eprintln!("[agent] Günstiges Modell nicht verfügbar, bleibe beim Hauptmodell: {e:#}");
                 None
@@ -141,7 +144,7 @@ impl Agent {
         let automatische_modellwahl = config.modell_modus == "automatisch";
 
         Self {
-            provider,
+            provider: Arc::from(provider),
             provider_modell: config.model.clone().unwrap_or_else(|| "Standardmodell".to_string()),
             guenstig,
             guenstig_modell,
@@ -340,14 +343,14 @@ impl Agent {
         // über einen weiteren Modellaufruf - genau die Latenz, die die
         // automatische Wahl eigentlich sparen soll, würde ein Klassifizierungs-
         // Aufruf wieder auffressen.
-        let provider: &dyn LlmProvider = match (&self.guenstig, self.automatische_modellwahl) {
+        let provider: Arc<dyn LlmProvider> = match (&self.guenstig, self.automatische_modellwahl) {
             (Some(guenstig), true) if ist_einfacher_auftrag(auftrag) => {
                 self.ui.ereignis(AgentEvent::ModellGewaehlt {
                     provider: guenstig.name().to_string(),
                     model: self.guenstig_modell.clone(),
                     grund: "automatisch: einfacher Auftrag".to_string(),
                 });
-                guenstig.as_ref()
+                Arc::clone(guenstig)
             }
             _ => {
                 if self.automatische_modellwahl {
@@ -362,7 +365,7 @@ impl Agent {
                         grund: grund.to_string(),
                     });
                 }
-                self.provider.as_ref()
+                Arc::clone(&self.provider)
             }
         };
 
@@ -391,15 +394,45 @@ impl Agent {
             // am Rundenanfang, bevor die nächste Anfrage rausgeht. Alles,
             // was seit der letzten Runde eingegangen ist, auf einmal
             // mitnehmen, nicht nur die neueste.
+            //
+            // Auf eine Antwort bis zum nächsten Zug zu warten reicht nicht -
+            // steckt der Hauptauftrag gerade in einem langen Werkzeug-Aufruf
+            // oder einem Wiederaufsetzen-Warten (bis zu 5x 120s), säße Jens
+            // entsprechend lange auf einer unbeantworteten Nachricht. Ein
+            // zweiter, unabhängiger Aufruf desselben Providers beantwortet
+            // sie deshalb sofort, parallel zum Hauptauftrag - der bekommt
+            // davon nichts mit, `nachrichten` bleibt allein in dieser
+            // Schleife verändert.
             while let Ok(text) = zwischenfragen.try_recv() {
+                let sofort_provider = Arc::clone(&provider);
+                let sofort_ui = Arc::clone(&self.ui);
+                let sofort_system = system.clone();
+                let mut sofort_kontext = nachrichten.clone();
+                let frage = text.clone();
+                sofort_kontext.push(Message::User(frage.clone()));
+
+                tokio::spawn(async move {
+                    let text = match sofort_provider
+                        .next(sofort_system.as_deref(), &sofort_kontext, &[])
+                        .await
+                    {
+                        Ok(antwort) => antwort.text,
+                        Err(e) => format!("(Konnte nicht sofort antworten: {e:#})"),
+                    };
+                    sofort_ui.ereignis(AgentEvent::ZwischenfrageAntwort { frage, text });
+                });
+
+                // Trotzdem in den Hauptverlauf aufnehmen, damit der laufende
+                // Auftrag weiß, dass die Frage gestellt wurde - aber ohne
+                // erneute Antwort zu verlangen, die kommt ja schon separat.
                 nachrichten.push(Message::User(format!(
                     "[Zwischenfrage von Jens, während du am eigentlichen Auftrag arbeitest - \
-                     beantworte sie kurz nebenbei, dann mach mit dem Auftrag weiter]: {text}"
+                     wurde bereits separat und sofort beantwortet. Nur berücksichtigen, falls \
+                     relevant für den Auftrag, nicht erneut beantworten]: {text}"
                 )));
             }
 
-            let antwort = provider
-                .next(system.as_deref(), &nachrichten, &tool_defs)
+            let antwort = rufe_mit_wiederaufsetzen(provider.as_ref(), system.as_deref(), &nachrichten, &tool_defs, self.ui.as_ref())
                 .await?;
 
             // Text ausgeben.
@@ -596,6 +629,56 @@ impl Agent {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Nach wie vielen fehlgeschlagenen Versuchen für denselben Zug aufgegeben wird.
+const MAX_VERSUCHE: u32 = 5;
+
+/// Wartezeit zwischen zwei Versuchen. Famulus' eigener Vorschlag (siehe
+/// Vault-Notiz „Telegram-Bot-Uebergabe.md"): server-seitige 500er sind meist
+/// nach ein, zwei Minuten wieder vorbei, kürzeres Warten trifft denselben
+/// überlasteten Dienst nur erneut.
+const WARTEZEIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Ruft `provider.next()` auf und wiederholt bei einem Fehler, statt den
+/// ganzen Auftrag abzubrechen - das war der eigentliche Bruch, nicht die
+/// Antwortzeit (die behebt das Streaming schon, siehe `llm/mod.rs`). Der
+/// bisherige Gesprächsverlauf (`nachrichten`) bleibt beim Retry unverändert
+/// erhalten - "Wiederaufsetzen" heißt hier: derselbe Zug wird noch einmal
+/// versucht, nicht der ganze Auftrag von vorn.
+///
+/// Eine Ausnahme: HTTP 402 (kein Guthaben) behebt sich nicht von selbst,
+/// egal wie oft man wartet - da wird sofort aufgegeben, damit Jens eine
+/// klare Fehlermeldung sieht statt zehn Minuten stiller Wartezeit auf ein
+/// Problem, das nur er lösen kann (Guthaben aufladen).
+async fn rufe_mit_wiederaufsetzen(
+    provider: &dyn LlmProvider,
+    system: Option<&str>,
+    nachrichten: &[Message],
+    tool_defs: &[ToolDefinition],
+    ui: &dyn Ui,
+) -> anyhow::Result<LlmAntwort> {
+    let mut versuch = 1;
+    loop {
+        match provider.next(system, nachrichten, tool_defs).await {
+            Ok(antwort) => return Ok(antwort),
+            Err(fehler) => {
+                let text = format!("{fehler:#}");
+                let kein_guthaben = text.contains("(402)");
+                if kein_guthaben || versuch >= MAX_VERSUCHE {
+                    return Err(fehler);
+                }
+                ui.ereignis(AgentEvent::Warte {
+                    grund: text,
+                    sekunden: WARTEZEIT.as_secs(),
+                    versuch,
+                    max_versuche: MAX_VERSUCHE,
+                });
+                tokio::time::sleep(WARTEZEIT).await;
+                versuch += 1;
             }
         }
     }
@@ -830,5 +913,108 @@ mod tests {
         let text = "ä".repeat(5_000);
         let raus = kuerzen(&text, 100);
         assert!(raus.contains("gekürzt"));
+    }
+
+    // ── rufe_mit_wiederaufsetzen ─────────────────────────────────────
+
+    mod wiederaufsetzen {
+        use super::super::*;
+        use crate::llm::ToolCall;
+        use async_trait::async_trait;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Mutex;
+
+        /// Scheitert bei den ersten `fehler_bis` Aufrufen mit `fehlertext`,
+        /// klappt danach. `fehler_bis = u32::MAX` heißt: scheitert immer.
+        struct FlakyProvider {
+            aufrufe: AtomicU32,
+            fehler_bis: u32,
+            fehlertext: &'static str,
+        }
+
+        #[async_trait]
+        impl LlmProvider for FlakyProvider {
+            async fn next(
+                &self,
+                _system: Option<&str>,
+                _messages: &[Message],
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<LlmAntwort> {
+                let n = self.aufrufe.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= self.fehler_bis {
+                    anyhow::bail!("{}", self.fehlertext);
+                }
+                Ok(LlmAntwort {
+                    text: "geklappt".to_string(),
+                    tool_calls: Vec::<ToolCall>::new(),
+                })
+            }
+
+            fn name(&self) -> &'static str {
+                "flaky"
+            }
+        }
+
+        /// Zeichnet nur auf, wie oft `Warte` gemeldet wurde - für die
+        /// echten Ereignisse (Text, ToolStart, ...) gibt's die anderen Uis.
+        struct AufzeichnendeUi {
+            warte_ereignisse: Mutex<u32>,
+        }
+
+        impl Ui for AufzeichnendeUi {
+            fn ereignis(&self, ereignis: AgentEvent) {
+                if let AgentEvent::Warte { .. } = ereignis {
+                    *self.warte_ereignisse.lock().unwrap() += 1;
+                }
+            }
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn wiederholt_bei_fehler_bis_es_klappt() {
+            let provider = FlakyProvider {
+                aufrufe: AtomicU32::new(0),
+                fehler_bis: 2,
+                fehlertext: "500 Interner Serverfehler",
+            };
+            let ui = AufzeichnendeUi { warte_ereignisse: Mutex::new(0) };
+
+            let ergebnis = rufe_mit_wiederaufsetzen(&provider, None, &[], &[], &ui).await;
+
+            assert_eq!(ergebnis.unwrap().text, "geklappt");
+            assert_eq!(provider.aufrufe.load(Ordering::SeqCst), 3, "sollte 2x scheitern, 3. Versuch klappt");
+            assert_eq!(*ui.warte_ereignisse.lock().unwrap(), 2, "pro Fehlversuch ein Warte-Ereignis");
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn gibt_nach_max_versuchen_auf() {
+            let provider = FlakyProvider {
+                aufrufe: AtomicU32::new(0),
+                fehler_bis: u32::MAX,
+                fehlertext: "503 Service Unavailable",
+            };
+            let ui = AufzeichnendeUi { warte_ereignisse: Mutex::new(0) };
+
+            let ergebnis = rufe_mit_wiederaufsetzen(&provider, None, &[], &[], &ui).await;
+
+            assert!(ergebnis.is_err(), "muss nach MAX_VERSUCHE aufgeben, nicht ewig warten");
+            assert_eq!(provider.aufrufe.load(Ordering::SeqCst), MAX_VERSUCHE);
+            assert_eq!(*ui.warte_ereignisse.lock().unwrap(), MAX_VERSUCHE - 1);
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn bricht_bei_402_sofort_ab_ohne_zu_warten() {
+            let provider = FlakyProvider {
+                aufrufe: AtomicU32::new(0),
+                fehler_bis: u32::MAX,
+                fehlertext: "API-Fehler von https://hyper.charm.land/v1/messages (402): kein Guthaben",
+            };
+            let ui = AufzeichnendeUi { warte_ereignisse: Mutex::new(0) };
+
+            let ergebnis = rufe_mit_wiederaufsetzen(&provider, None, &[], &[], &ui).await;
+
+            assert!(ergebnis.is_err());
+            assert_eq!(provider.aufrufe.load(Ordering::SeqCst), 1, "402 darf nicht wiederholt werden");
+            assert_eq!(*ui.warte_ereignisse.lock().unwrap(), 0, "kein sinnloses Warten auf fehlendes Guthaben");
+        }
     }
 }

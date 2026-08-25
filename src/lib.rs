@@ -12,6 +12,8 @@
 
 pub mod agent;
 pub mod config;
+/// Guthaben-Abfrage (Hyper/OpenRouter), von GUI und Telegram-Bot genutzt
+pub mod credits;
 /// Chat-Verlauf mit Volltextsuche (SQLite)
 pub mod history;
 pub mod llm;
@@ -19,5 +21,7 @@ pub mod memory;
 /// System-Prompt-Presets mit Dropdown-Umschaltung
 pub mod presets;
 pub mod permissions;
+/// Famulus als Telegram-Bot ansprechbar machen (Binary `famulus-telegram`).
+pub mod telegram;
 pub mod tools;
 pub mod ui;

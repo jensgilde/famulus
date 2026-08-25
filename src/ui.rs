@@ -25,6 +25,13 @@ pub enum AgentEvent {
     /// eigenes Ereignis statt eines einmaligen Konfigurationswerts. Damit
     /// eine Fehleinschätzung sofort sichtbar ist, nicht lautlos bleibt.
     ModellGewaehlt { provider: String, model: String, grund: String },
+    /// Ein Zug ist fehlgeschlagen, wird aber wiederholt statt den ganzen
+    /// Auftrag abzubrechen - siehe `agent.rs::rufe_mit_wiederaufsetzen`.
+    Warte { grund: String, sekunden: u64, versuch: u32, max_versuche: u32 },
+    /// Antwort auf eine Zwischenfrage - kommt aus einem separaten,
+    /// parallelen Aufruf, nicht aus dem laufenden Hauptauftrag, siehe
+    /// `agent.rs::run_task` (Zwischenfragen-Block).
+    ZwischenfrageAntwort { frage: String, text: String },
     /// Der Auftrag ist fertig (finale Antwort wurde schon via Text gesendet).
     Fertig,
     /// Der Auftrag ist abgebrochen (Fehler oder Limit erreicht).
@@ -72,6 +79,18 @@ impl Ui for TerminalUi {
             }
             AgentEvent::ModellGewaehlt { provider, model, grund } => {
                 println!("{}", format!("  ◆ {provider}: {model} ({grund})").dimmed());
+            }
+            AgentEvent::Warte { grund, sekunden, versuch, max_versuche } => {
+                println!(
+                    "{}",
+                    format!(
+                        "  ⏳ Fehlgeschlagen ({versuch}/{max_versuche}), versuche in {sekunden}s erneut: {grund}"
+                    )
+                    .yellow()
+                );
+            }
+            AgentEvent::ZwischenfrageAntwort { frage, text } => {
+                println!("\n{}", format!("  ↩ Zu \"{frage}\": {text}").cyan());
             }
             AgentEvent::Fertig => {
                 println!("\n{}", "✔ Fertig".green().bold());
@@ -131,6 +150,22 @@ mod tests {
                     grund: "automatisch".into(),
                 },
                 "modell_gewaehlt",
+            ),
+            (
+                AgentEvent::Warte {
+                    grund: "500".into(),
+                    sekunden: 120,
+                    versuch: 1,
+                    max_versuche: 5,
+                },
+                "warte",
+            ),
+            (
+                AgentEvent::ZwischenfrageAntwort {
+                    frage: "wie spät?".into(),
+                    text: "14 Uhr".into(),
+                },
+                "zwischenfrage_antwort",
             ),
             (AgentEvent::Fertig, "fertig"),
             (

@@ -5,6 +5,23 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] – 2026-08-26
+
+### Hinzugefügt
+- **`/status`-Befehl im Telegram-Bot**: Schickt man dem Bot `/status`,
+  antwortet er sofort mit dem aktuell eingestellten Modell und dem
+  Guthaben beim aktiven Provider - ohne LLM-Lauf, kostet also nichts
+  und beantwortet die Frage auch dann, wenn der Provider gerade
+  gestört ist. Motiviert von der iPad-Nutzung: Dort gibt es keine
+  Statusleiste wie in der GUI, Modell und Credits waren unsichtbar.
+- Neues Kern-Modul `src/credits.rs`: die Guthaben-Abfrage (Hyper,
+  OpenRouter, Ollama → "lokal") lebt jetzt einmal im Kern statt
+  doppelt in GUI und Bot. Die GUI nutzt ihre eigene Kopie noch -
+  Konsolidierung ist ein Kandidat für eine spätere Version.
+
+### Geändert
+- Version-Bump auf 0.9.0 (neues Feature = Minor nach SemVer).
+
 ## [0.8.1] – 2026-08-24
 
 ### Geändert

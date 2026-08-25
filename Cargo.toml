@@ -3,7 +3,7 @@ members = ["gui"]
 
 [package]
 name = "famulus-core"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
 description = "Famulus: persönlicher KI-Agent mit vollem Rechnerzugriff, austauschbarem LLM-Backend und harten Sicherheitsgrenzen."
 
@@ -14,6 +14,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "famulus"
 path = "src/main.rs"
+
+[[bin]]
+name = "famulus-telegram"
+path = "src/bin/telegram.rs"
 
 [dependencies]
 # Nur die Bausteine, die Famulus wirklich braucht - "full" zieht Netzwerk-
@@ -42,6 +46,11 @@ async-trait = "0.1"
 # Datenbank wird mitkompiliert statt vom System geholt - dann haengt Famulus
 # nicht an der SQLite-Version der jeweiligen Fedora-Installation.
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+# "test-util" nur für Tests: lässt tokio::time::pause() virtuelle Zeit sofort
+# vorspulen, statt in rufe_mit_wiederaufsetzen()-Tests echte 120s zu warten.
+tokio = { version = "1", features = ["test-util"] }
 
 # Ohne diesen Block baut Cargo Release-Binaries mit Debug-Symbolen und ohne
 # Optimierung ueber Crate-Grenzen hinweg. Kostet laengere Release-Builds,
