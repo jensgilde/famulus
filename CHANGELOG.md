@@ -5,6 +5,36 @@ Alle nennenswerten Änderungen an Famulus werden in dieser Datei dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] – 2026-08-26
+
+### Behoben
+- **`run_shell` hing ohne Timeout endlos**: Ein einzelner hängender
+  Shell-Befehl blockierte den gesamten Agenten (und damit den
+  Telegram-Bot) für immer. Konkreter Auslöser am selben Tag: ein
+  `find` über das Home-Verzeichnis, das in einem blockierten
+  `readdir` (Ordner `~/Music`) hing – der Bot war 50+ Minuten stumm.
+  Ab jetzt gilt pro Befehl ein Zeitdeckel (Standard 300 s, per
+  `timeout_seconds` je Aufruf anpassbar); bei Überschreitung wird
+  die **gesamte Prozessgruppe** hart beendet (eigene Gruppe via
+  `setpgid`, SIGKILL an `-PID`), damit keine verwaisten Kindprozesse
+  übrig bleiben.
+- **Leere Ausgabe bei `run_shell`**: `tokio::process::Command` erbt
+  ohne Angabe standardmäßig die stdio-Handles des Elternprozesses –
+  `wait_with_output()` hätte dann nichts zu sammeln. Stdout/Stderr
+  werden jetzt explizit als Pipe gezogen.
+
+### Geändert
+- `run_shell` kennt den neuen Parameter `timeout_seconds`
+  (optional, Standard 300). Für bewusst lange Befehle – z. B.
+  HandBrake-/DVD-Konvertierung – setzt der Agent ihn höher.
+- Version-Bump auf 0.9.1 (Patch: Bugfixes). `gui/tauri.conf.json`
+  gleichgezogen (0.8.1 → 0.9.1).
+
+### Neu getestet
+- 4 Unit-Tests für das Shell-Timeout: schneller Befehl läuft durch,
+  hängender Befehl bricht rechtzeitig ab, Befehl unterhalb des Limits
+  bleibt unangetastet, Kindprozesse werden beim Timeout mitgetötet.
+
 ## [0.9.0] – 2026-08-26
 
 ### Hinzugefügt

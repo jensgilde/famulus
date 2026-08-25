@@ -3,7 +3,7 @@ members = ["gui"]
 
 [package]
 name = "famulus-core"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 description = "Famulus: persönlicher KI-Agent mit vollem Rechnerzugriff, austauschbarem LLM-Backend und harten Sicherheitsgrenzen."
 
@@ -42,6 +42,7 @@ toml = "0.8"
 dirs = "5"
 colored = "2"
 async-trait = "0.1"
+libc = "0.2"  # setpgid/kill: run_shell-Timeout muss die ganze Prozessgruppe treffen
 # Gedaechtnis: SQLite als einzelne Datei, kein Server. "bundled" heisst, die
 # Datenbank wird mitkompiliert statt vom System geholt - dann haengt Famulus
 # nicht an der SQLite-Version der jeweiligen Fedora-Installation.
