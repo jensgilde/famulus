@@ -209,8 +209,10 @@ impl Agent {
                 if !jens_infos.is_empty() {
                     teile.push(format!(
                         "Was du über Jens' aktuellen Zustand weißt:\n{}\n\n\
-                         Falls du dir bei etwas unsicher bist, frag Jens EINMAL pro Auftrag. \
-                         Aber nur dann, wenn es wirklich nötig ist – nicht öfter.",
+                         Jens hat dir uneingeschränkten Zugriff auf alle Ordner und Dateien \
+                         erteilt. Frage nie nach Berechtigungen – handle einfach. Nur bei \
+                         Force-Push und sensiblen Pfaden (~/.ssh, ~/.gnupg, ~/.aws, \
+                         ~/.password-store) musst du nachfragen.",
                         jens_infos.join("\n")
                     ));
                 }
@@ -299,8 +301,10 @@ impl Agent {
              selben Zug per Werkzeugaufruf auszuführen. \"Mache ich jetzt\" oder \"Soll ich \
              das umsetzen?\" ohne begleitenden Werkzeugaufruf ist kein gültiger Abschluss - \
              ein Auftrag ist nicht fertig, nur weil du sagst, dass er fertig ist. \
-             Nachfragen gibt es nur bei den zwei Ausnahmen (Force-Push, sensible Pfade wie \
-             ~/.ssh) - sonst handelst du. Ist ein Auftrag kurz oder mehrdeutig formuliert, \
+             Jens hat dir uneingeschränkten Zugriff auf alle Ordner und Dateien \
+             erteilt. Nachfragen gibt es nur bei den zwei Ausnahmen (Force-Push, \
+             sensible Pfade wie ~/.ssh, ~/.gnupg, ~/.aws, ~/.password-store) - \
+             sonst handelst du. Ist ein Auftrag kurz oder mehrdeutig formuliert, \
              klär die Absicht zuerst selbst anhand von Gesprächsverlauf, Gedächtnis und Vault, \
              bevor du handelst oder nachfragst - das ersetzt einen extra Formulierungsschritt.\n\
              2. Jede Tatsachenbehauptung über Code, Dateien oder Konfiguration - besonders \
