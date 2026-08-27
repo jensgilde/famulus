@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.6] – 2026-08-27
+
+### Geändert
+- **Famulus-App-Icon auf den Stil von Famulus Games gebracht**: Das
+  Icon nutzt jetzt dieselbe Marken-DNA wie das FG-Icon – Braun→Schwarz-
+  Verlauf (1:1 aus dem FG-Icon gesampelt, Abweichung 0,0), abgerundete
+  Ecken mit transparenten Rändern, orangenes „F" in Menlo Bold (#F86E27)
+  mit identischer Buchstabenhöhe. Gelb/schwarzes Eck-Icon aus 0.9.4 ist
+  abgelöst. Alle Famulus-Produkte haben damit denselben visuellen Stil.
+- **Neues Skript `scripts/generate-icon.py`**: Deterministischer
+  Icon-Generator (PIL + Menlo.ttc + FG-Referenz), erzeugt macOS
+  (.png/.icns/.ico + Store-Kacheln), iOS-AppIcon-Set und Android-
+  Adaptive-Icons. Kein externes Grafik-Werkzeug nötig.
+- iOS-AppIcon-Set (iPad/iPhone) und Android-Varianten auf das neue
+  Icon umgestellt.
+
 ## [0.9.5] – 2026-08-27
 
 ### Geändert

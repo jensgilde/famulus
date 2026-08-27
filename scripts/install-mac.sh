@@ -19,6 +19,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "==> Baue famulus-gui (Release, signiert)..."
+export PATH="$HOME/.cargo/bin:$PATH"
 cargo tauri build --bundles app -c gui/tauri.conf.json
 
 BUNDLE="target/release/bundle/macos/Famulus.app"

@@ -1,6 +1,6 @@
 [package]
 name = "famulus-gui"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2021"
 description = "Famulus: grafische Oberflaeche (Tauri 2) auf demselben Kern wie das CLI."
 

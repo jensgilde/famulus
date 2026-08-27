@@ -1,6 +1,6 @@
 {
   "productName": "Famulus",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "identifier": "one.gilde.famulus",
   "build": {
     "frontendDist": "../ui"
