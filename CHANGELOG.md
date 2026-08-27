@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.4] – 2026-08-27
+
+### Geändert
+- **Markenfarbe finalisiert, dann Warm-Theme**: Zuerst Magenta→Gelb
+  endgültig abgeschlossen (die installierte App lief noch mit #ff69b4
+  aus einem alten Build; App-Icon per Hue-Shift umgefärbt, drei
+  veraltete `.bak`-Dateien entfernt). Anschließend neues Aussehen nach
+  Screenshot-Vorgabe von Jens: warmes Dunkelbraun statt Schwarz
+  (`#211B16` bis `#1D1712`), Creme-Text (`#EDE3D5`) und Orange-Akzent
+  `#F86E27` (Hover `#FF8A4A`) statt Gelb im GUI. Gelb `#FFC53D` bleibt
+  die Markenfarbe für Icons und künftige Produkte – das Famulus-GUI
+  trägt jetzt den Warm-Look. Gebaut und installiert auf Mac, iPad und
+  iPhone.
+
+
 ## [0.9.3] – 2026-08-26
 
 ### Behoben
