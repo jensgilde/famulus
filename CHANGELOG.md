@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.9.5] – 2026-08-27
+
+### Geändert
+- **Durchgängiger Farbverlauf Braun → Schwarz** in der gesamten GUI
+  (Mac + iPad + iPhone): Die App zeichnet jetzt einen vertikalen
+  Verlauf vom warmen Braun oben (`#211B16`) bis reinem Schwarz unten.
+  Die Flächen darüber sind teiltransparent eingefärbt, damit der
+  Verlauf als Linie durch die ganze App läuft: Toolbar oben bleibt
+  braun, Sidebars halbtransparent, Statusbar unten fast schwarz.
+  Jens' Wunsch: „oben das Braun sehr gut, nach unten bis auf Schwarz".
+- **Alle Famulus-Produkte auf denselben Style gebracht**: Famulus
+  Games (SwiftUI) zieht auf die warme Palette um (Braun/Creme/
+  Orange-Akzent statt Schwarz/Gelb) – beide Apps nutzen jetzt
+  identische Design-Tokens inkl. desselben Verlaufs.
+- **App-Icon für Famulus Games**: „FG" in Menlo Bold und Orange auf
+  Braun-Schwarz-Verlauf, gleiche DNA wie das Famulus-Icon („F",
+  Gelb). Asset-Catalog neu angelegt, project.yml zieht mit.
+
 ## [0.9.4] – 2026-08-27
 
 ### Geändert

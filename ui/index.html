@@ -9,6 +9,7 @@
     font-size: 13px; line-height: 1.6; font-weight: 400;
     -webkit-font-smoothing: antialiased;
 
+    --bg-top: #211B16; /* Anker des durchgängigen Verlaufs Braun->Schwarz */
     --bg-primary: #211B16; --bg-secondary: #282019; --bg-tertiary: #2E251C;
     --bg-hover: #382A1E; --bg-active: #423222; --bg-input: #251D15;
     --bg-sidebar: #1D1712; --bg-code: #2A2117;
@@ -26,8 +27,13 @@
     --radius: 6px; --radius-lg: 10px;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  /* Durchgängiger Verlauf: Braun oben -> Schwarz unten (v0.9.5).
+     body zeichnet den Verlauf; alle Flächen darüber sind teiltransparent
+     eingefärbt, damit der Verlauf als rote Linie durch die App läuft. */
   body {
-    background: var(--bg-primary); color: var(--text-primary);
+    background: linear-gradient(180deg,
+      var(--bg-top) 0%, #1B1511 22%, #151009 45%, #0B0806 70%, #000 100%);
+    color: var(--text-primary);
     overflow: hidden; height: 100vh; width: 100vw;
   }
   #app { height: 100vh; width: 100vw; display: flex; flex-direction: column; }
@@ -36,7 +42,7 @@
   .toolbar {
     display: flex; align-items: center; justify-content: space-between;
     height: 36px; padding: 0 12px;
-    background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+    background: rgba(27,21,17,0.88); border-bottom: 1px solid var(--border);
     user-select: none; flex-shrink: 0;
   }
   .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
@@ -87,7 +93,7 @@
   /* ---- Layout ---- */
   .main-content { display: flex; flex: 1; overflow: hidden; }
 
-  .sidebar { width: 240px; min-width: 240px; background: var(--bg-sidebar); display: flex; flex-direction: column; flex-shrink: 0; transition: width .2s ease, min-width .2s ease, opacity .15s ease; }
+  .sidebar { width: 240px; min-width: 240px; background: rgba(20,15,11,0.72); display: flex; flex-direction: column; flex-shrink: 0; transition: width .2s ease, min-width .2s ease, opacity .15s ease; }
   .left-sidebar { border-right: 1px solid var(--border); }
   .right-sidebar { border-left: 1px solid var(--border); }
   .sidebar.collapsed { width: 0; min-width: 0; padding: 0; opacity: 0; overflow: hidden; border: none; }
@@ -327,7 +333,7 @@
 
   .statusbar {
     padding: 4px 20px; font-size: 10px; color: var(--text-faint);
-    background: var(--bg-secondary); border-top: 1px solid var(--border);
+    background: rgba(0,0,0,0.55); border-top: 1px solid var(--border);
     display: flex; justify-content: space-between; flex-shrink: 0;
   }
 
