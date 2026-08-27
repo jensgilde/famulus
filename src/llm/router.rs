@@ -19,6 +19,7 @@
 //! schon da.
 
 use super::{LlmAntwort, LlmProvider, Message, ToolDefinition};
+#[cfg(not(test))]
 use crate::memory::Gedaechtnis;
 use async_trait::async_trait;
 use std::time::Instant;

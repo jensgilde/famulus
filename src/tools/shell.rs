@@ -42,6 +42,8 @@ fn ist_force_push(command: &str) -> bool {
                 || t.starts_with("--force")
                 // Kombinierte Kurzflags wie "-uf".
                 || (t.starts_with('-') && !t.starts_with("--") && t.len() > 1 && t[1..].contains('f'))
+                // Git-Refspec mit +: "git push origin +main" (force-push, kein normaler Push)
+                || t.starts_with('+')
         });
         if hat_force_flag {
             return true;
@@ -203,6 +205,13 @@ mod tests {
     #[test]
     fn erkennt_kombinierte_kurzflags() {
         assert!(ist_force_push("git push -uf origin main"));
+    }
+
+    #[test]
+    fn erkennt_plus_syntax_force_push() {
+        assert!(ist_force_push("git push origin +main"));
+        assert!(ist_force_push("git push origin +v0.9.2:refs/tags/v0.9.2"));
+        assert!(ist_force_push("git push origin +HEAD:main"));
     }
 
     #[test]

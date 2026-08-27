@@ -954,7 +954,7 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "famulus-core"
-version = "0.9.1"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "famulus-gui"
-version = "0.9.1"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",

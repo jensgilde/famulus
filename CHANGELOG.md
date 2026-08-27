@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.9.3] – 2026-08-26
+
+### Behoben
+- **Force-Push-Erkennung ließ `+`-Syntax durch**: `git push origin
+  +main` (Git-Refspec-Syntax für Force-Push) wurde nicht erkannt,
+  weil `ist_force_push()` nur `-f`, `--force*` und kombinierte
+  Kurzflags prüfte. Jetzt erkennt die Funktion auch Token, die mit
+  `+` beginnen (z. B. `+main`, `+v0.9.2:refs/tags/v0.9.2`,
+  `+HEAD:main`). Neuer Test `erkennt_plus_syntax_force_push` mit
+  drei Varianten.
+- **Unused-Import-Warnung in `router.rs`**: `use crate::memory::Gedaechtnis`
+  war nur im `#[cfg(not(test))]`-Pfad tatsächlich genutzt, erzeugte
+  aber im Test-Build eine Compiler-Warnung. Jetzt korrekt hinter
+  `#[cfg(not(test))]` importiert.
+
+### Neu getestet
+- 1 neuer Test für `+`-Syntax-Force-Push (3 Assertions: einfacher
+  Branch, Tag-Refspec, HEAD-Refspec). Gesamt: 60 Tests, 0 Warnungen.
 ## [0.9.2] – 2026-08-26
 
 ### Geändert
