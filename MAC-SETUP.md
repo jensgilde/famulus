@@ -172,6 +172,22 @@ zuerst im aktuellen Verzeichnis, dann in `~/.famulus/.env`. Wer die GUI per
 Doppelklick startet statt aus dem Terminal, hat kein sinnvolles
 Arbeitsverzeichnis und braucht die zweite Variante.
 
+## 8.5 Ordner-Freigaben: nie wieder neu freigeben (TCC)
+
+macOS merkt sich Ordner-Freigaben (Documents, Downloads, Desktop, Fotos ...)
+anhand der Codesignatur-Identität eines Programms. Zwei Regeln:
+
+1. **CLI-Binaries niemals nackt bauen.** Immer `./scripts/build-cli.sh`
+   statt `cargo build --release`. Das Skript signiert die Binaries mit dem
+   echten Developer-Zertifikat und festen Identifiern
+   (`one.gilde.famulus-cli`, `one.gilde.famulus-telegram`). Bei Ad-hoc-
+   Signatur ist die Identität der reine Code-Hash – der ändert sich mit
+   jedem Build, und macOS fragt alle Freigaben neu ab.
+2. **Apps nur über ihr Install-Skript installieren**
+   (`./scripts/build-app.sh` für die Swift-Hülle).
+
+Auslöser dieser Regel: August 2026, 52 Freigabe-Dialoge in 7 Tagen.
+
 ## 9. Was hier ungetestet ist
 
 Ehrlichkeitshalber: Dieses Projekt ist bisher **nur auf Fedora Linux gebaut
