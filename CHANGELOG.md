@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.12.1] – 2026-08-28
+
+### Behoben
+- **Stop-Button war tot**: `stoppe_auftrag()` in der FFI-Brücke hat nur
+  `handle.abort()` gerufen – ein hart beendeter Tokio-Task kann aber
+  selbst kein Abschluss-Ereignis mehr senden. Die Swift-Hülle blieb
+  dadurch für immer im Beschäftigt-Zustand. Jetzt emittiert
+  `stoppe_auftrag()` das `Abgebrochen`-Ereignis nach dem Abort selbst
+  (dasselbe Muster wie das Tauri-GUI in `gui/src/lib.rs`); die
+  Ereignis-Senke wird dafür im `LAUFENDER_AUFTRAG`-Static mit abgelegt.
+- **Keine Zwischenfragen während eines laufenden Auftrags**: Der
+  Senden-Button war bei `beschaeftigt` deaktiviert und der Store hat
+  jeden Text abgelehnt – obwohl die FFI-Funktion `zwischenfrage(text)`
+  längst existierte. Jetzt verhält sich die Hülle wie die
+  Tauri-Referenz (`ui/index.html::sendeZwischenfrage`): Bei laufendem
+  Auftrag sendet der Pfeil-Button eine Zwischenfrage an den laufenden
+  Zug, der Platzhalter wechselt zu „Zwischenfrage stellen…".
+
+### Geändert
+- **Native Schriften statt Monospace**: Alle `design: .monospaced`-
+  Definitionen der Swift-Hülle (17 Stellen) sind jetzt SF Pro – die
+  native macOS-Systemschrift, modern und edel statt Terminal-Look.
+  Auch das Tauri-Frontend (`ui/index.html`) nutzt jetzt den System-
+  Font-Stack (`-apple-system`) statt "SF Mono".
+
+## [0.12.0] – 2026-08-28
+
+
 ## [0.12.0] – 2026-08-28
 
 ### Hinzugefügt

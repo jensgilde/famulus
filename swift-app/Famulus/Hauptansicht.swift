@@ -1,4 +1,4 @@
-// Famulus – Hauptansicht der nativen SwiftUI-Hülle v0.12.0.
+// Famulus – Hauptansicht der nativen SwiftUI-Hülle v0.12.1.
 // Phoenix-Style wie Tankmonitor und die Webseite: dunkle Grundfläche
 // #1e1e1e, weicher Orange-Fade oben, Akzent #f97316.
 //
@@ -67,7 +67,7 @@ struct Kopfzeile: View {
                     .foregroundStyle(Marke.textLeise)
                     .font(.system(size: 11))
             }
-            .font(.system(size: 14, weight: .bold, design: .monospaced))
+            .font(.system(size: 14, weight: .bold))
             .foregroundStyle(Marke.text)
 
             Spacer()
@@ -124,7 +124,7 @@ struct ChatSidebar: View {
         VStack(spacing: 0) {
             HStack {
                 Text("Chats")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Marke.textSekundär)
                 Spacer()
                 Button {
@@ -172,11 +172,11 @@ struct ArchivSidebar: View {
 
             HStack {
                 Text("Archiv")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Marke.textSekundär)
                 Spacer()
                 Text("\(store.archiv.count)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 11))
                     .foregroundStyle(Marke.textLeise)
             }
             .padding(12)
@@ -186,7 +186,7 @@ struct ArchivSidebar: View {
             if store.archiv.isEmpty {
                 Spacer()
                 Text("Keine archivierten Chats.\nRechtsklick auf einen Chat → Archivieren.")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 11))
                     .foregroundStyle(Marke.textLeise)
                     .multilineTextAlignment(.center)
                     .padding(16)
@@ -219,7 +219,7 @@ struct ChatZeile: View {
     var body: some View {
         Button(action: wahl) {
             Text(chat.titel)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: 12))
                 .foregroundStyle(aktiv ? Marke.akzent : Marke.textSekundär)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -250,7 +250,7 @@ struct ArchivZeile: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Marke.textLeise)
                 Text(chat.titel)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 11))
                     .foregroundStyle(Marke.textSekundär)
                     .lineLimit(1)
             }
@@ -305,9 +305,12 @@ struct ChatBereich: View {
     // ── Eingabezeile ──
     private var eingabeZeile: some View {
         HStack(spacing: 8) {
-            TextField("Schreib Famulus einen Auftrag…", text: $eingabe, axis: .vertical)
+            TextField(store.beschaeftigt
+                ? "Zwischenfrage stellen…"
+                : "Schreib Famulus einen Auftrag…",
+                text: $eingabe, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13, design: .monospaced))
+                .font(.system(size: 13))
                 .foregroundStyle(Marke.text)
                 .focused($eingabeFokus)
                 .onSubmit { senden() }
@@ -316,19 +319,25 @@ struct ChatBereich: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Marke.rand, lineWidth: 1))
 
             if store.beschaeftigt {
+                // Stoppt den laufenden Auftrag. Der Kern emittiert danach
+                // selbst `Abgebrochen` (ffi.rs::stoppe_auftrag), sodass der
+                // Chat-Bereich zuverlässig aus dem Beschäftigt-Zustand kommt.
                 Button(action: store.stoppen) {
-                    Image(systemName: "xmark")
+                    Image(systemName: "stop.fill")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(Marke.gefahr)
                         .padding(8)
                 }
                 .buttonStyle(.plain)
+                .help("Auftrag abbrechen")
             }
 
+            // Beschäftigt: sendet die Zwischenfrage (store.senden verzweigt
+            // selbst), sonst einen neuen Auftrag – wie in der Tauri-Referenz.
             Button(action: senden) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(eingabe.trimmingCharacters(in: .whitespaces).isEmpty || store.beschaeftigt
+                    .foregroundStyle(eingabe.trimmingCharacters(in: .whitespaces).isEmpty
                         ? Marke.textHauch : Marke.akzent)
                     .padding(8)
             }
@@ -360,7 +369,7 @@ struct ChatBereich: View {
             Text(store.creditsText)
                 .foregroundStyle(Marke.erfolg)
         }
-        .font(.system(size: 11, design: .monospaced))
+        .font(.system(size: 11))
         .padding(.horizontal, 16).padding(.vertical, 7)
         .background(Marke.fußFläche)
     }
@@ -388,14 +397,14 @@ struct NachrichtenZeile: View {
         VStack(alignment: istUser ? .trailing : .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(rolle)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(farbe)
                 Text(formatZeit(nachricht.zeitstempel))
-                    .font(.system(size: 9, design: .monospaced))
+                    .font(.system(size: 9))
                     .foregroundStyle(Marke.textLeise)
             }
             Text(nachricht.inhalt)
-                .font(.system(size: 13, design: .monospaced))
+                .font(.system(size: 13))
                 .foregroundStyle(istFehler ? Marke.gefahr : Marke.text)
                 .textSelection(.enabled)
         }
@@ -443,7 +452,7 @@ struct LiveBlock: View {
         VStack(alignment: .leading, spacing: 8) {
             if !store.denktText.isEmpty {
                 Text("… " + store.denktText)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.system(size: 13))
                     .foregroundStyle(Marke.textSekundär)
                     .textSelection(.enabled)
             }
@@ -473,7 +482,7 @@ struct SchrittZeile: View {
                     Text(schritt.art == .werkzeug ? schritt.name : schritt.text)
                         .lineLimit(offen ? nil : 1)
                 }
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 11))
                 .foregroundStyle(Marke.textLeise)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -481,7 +490,7 @@ struct SchrittZeile: View {
 
             if offen, let ergebnis = schritt.ergebnis {
                 Text(String(ergebnis.prefix(4000)))
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 10))
                     .foregroundStyle(Marke.textLeise)
                     .textSelection(.enabled)
                     .padding(6)
@@ -506,7 +515,7 @@ struct PresetPanel: View {
             PresetAuswahl(store: store, promptText: $promptText)
 
             TextEditor(text: $promptText)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: 12))
                 .foregroundStyle(Marke.text)
                 .frame(height: 90)
                 .scrollContentBackground(.hidden)
@@ -576,7 +585,7 @@ struct PresetAuswahl: View {
         } label: {
             HStack {
                 Text(store.aktivesPreset ?? "Standard")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Marke.text)
                     .lineLimit(1)
                 Spacer()

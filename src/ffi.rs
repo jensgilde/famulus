@@ -1,4 +1,4 @@
-// Famulus – UniFFI-Brücke v0.10.0.
+// Famulus – UniFFI-Brücke v0.12.1.
 // Dünne FFI-Schicht für die native Swift-Hülle (swift-app/).
 // Enthält auch die Logik, die vorher nur im Tauri-GUI wohnte
 // (Modell-Liste, TOML-Umschaltung, History-Zugriff), damit der Kern sie
@@ -28,7 +28,14 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 
 /// Hält den zuletzt gestarteten Auftrag fest, damit stoppe_auftrag ihn
 /// abbrechen kann. Nur einer gleichzeitig - dieselbe Regel wie in der GUI.
-static LAUFENDER_AUFTRAG: LazyLock<Mutex<Option<tokio::task::JoinHandle<()>>>> =
+/// Die Ereignis-Senke wird mit abgelegt: Ein hart abgebrochener Tokio-Task
+/// kann selbst kein `Abgebrochen` mehr senden - stoppe_auftrag emittiert
+/// das Ereignis deshalb nach dem abort() selbst (Muster aus gui/src/lib.rs).
+struct LaufenderAuftrag {
+    handle: tokio::task::JoinHandle<()>,
+    ui: Arc<dyn Ui>,
+}
+static LAUFENDER_AUFTRAG: LazyLock<Mutex<Option<LaufenderAuftrag>>> =
     LazyLock::new(|| Mutex::new(None));
 
 /// Sendehälfte für Zwischenfragen an den gerade laufenden Auftrag - siehe
@@ -144,15 +151,17 @@ fn verlauf_zu_nachrichten(json: &str) -> Vec<Message> {
 /// abgebrochen (wie in der GUI).
 pub fn starte_auftrag(auftrag: String, verlauf_json: String, cb: Box<dyn AuftragsCallback>) {
     if let Some(alt) = LAUFENDER_AUFTRAG.lock().unwrap().take() {
-        alt.abort();
+        alt.handle.abort();
     }
 
     let (zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
     *ZWISCHENFRAGE_KANAL.lock().unwrap() = Some(zf_tx);
 
+    let cb: Arc<dyn AuftragsCallback> = cb.into();
+    let ui: Arc<dyn Ui> = Arc::new(FfiUi { cb });
+
+    let task_ui = Arc::clone(&ui);
     let handle = RUNTIME.spawn(async move {
-        let cb: Arc<dyn AuftragsCallback> = cb.into();
-        let ui: Arc<dyn Ui> = Arc::new(FfiUi { cb });
         let vorherige_nachrichten = verlauf_zu_nachrichten(&verlauf_json);
 
         let vorbereitung = (|| -> anyhow::Result<(Config, Box<dyn llm::LlmProvider>)> {
@@ -163,26 +172,37 @@ pub fn starte_auftrag(auftrag: String, verlauf_json: String, cb: Box<dyn Auftrag
 
         match vorbereitung {
             Ok((config, provider)) => {
-                let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
+                let agent = Agent::new(config, provider, Arc::clone(&task_ui)).await;
                 if let Err(e) = agent.run_task(&vorherige_nachrichten, &auftrag, zf_rx).await {
-                    ui.ereignis(AgentEvent::Abgebrochen {
+                    task_ui.ereignis(AgentEvent::Abgebrochen {
                         fehler: format!("{e:#}"),
                     });
                 }
             }
-            Err(e) => ui.ereignis(AgentEvent::Abgebrochen {
+            Err(e) => task_ui.ereignis(AgentEvent::Abgebrochen {
                 fehler: format!("{e:#}"),
             }),
         }
     });
 
-    *LAUFENDER_AUFTRAG.lock().unwrap() = Some(handle);
+    *LAUFENDER_AUFTRAG.lock().unwrap() = Some(LaufenderAuftrag { handle, ui });
 }
 
-/// Bricht den laufenden Auftrag ab.
+/// Bricht den laufenden Auftrag ab und meldet der Hülle `Abgebrochen`.
+/// Der abort() allein reicht nicht: Ein hart beendeter Tokio-Task sendet
+/// selbst kein Abschluss-Ereignis mehr, die Hülle bliebe für immer im
+/// Beschäftigt-Zustand (Bug: "toter" Stop-Button). Das Ereignis wird
+/// deshalb hier emittiert - exakt das Muster aus gui/src/lib.rs.
 pub fn stoppe_auftrag() {
-    if let Some(h) = LAUFENDER_AUFTRAG.lock().unwrap().take() {
-        h.abort();
+    if let Some(auftrag) = LAUFENDER_AUFTRAG.lock().unwrap().take() {
+        if !auftrag.handle.is_finished() {
+            auftrag.handle.abort();
+            auftrag.ui.ereignis(AgentEvent::Abgebrochen {
+                fehler: "Abgebrochen.".to_string(),
+            });
+        }
+        // Ist der Task bereits fertig, hat er sein Abschluss-Ereignis
+        // (Fertig/Abgebrochen) schon selbst gesendet.
     }
     *ZWISCHENFRAGE_KANAL.lock().unwrap() = None;
 }

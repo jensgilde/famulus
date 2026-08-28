@@ -1,4 +1,4 @@
-// Famulus – Zustandsmodell der nativen SwiftUI-Hülle v0.12.0.
+// Famulus – Zustandsmodell der nativen SwiftUI-Hülle v0.12.1.
 // Ruft den Rust-Kern über die UniFFI-Bindings (Generated/).
 // Dieselbe Ereignis-Logik wie ui/index.html der Tauri-GUI:
 // Agent-Ereignisse kommen als JSON über das AuftragsCallback und
@@ -169,7 +169,20 @@ final class FamulusStore {
 
     func senden(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !beschaeftigt else { return }
+        guard !trimmed.isEmpty else { return }
+
+        // Beschäftigt: als Zwischenfrage senden – wie die Tauri-Referenz
+        // (ui/index.html::sendeZwischenfrage). Kein neuer Auftrag, der
+        // laufende läuft weiter; die Antwort kommt als `zwischenfrage_antwort`.
+        if beschaeftigt {
+            var chat = aktiverChat
+            chat.nachrichten.append(ChatNachricht(
+                rolle: "user", inhalt: trimmed, zeitstempel: Date.now.timeIntervalSince1970 * 1000))
+            aktiverChat = chat
+            _ = speichern(chat: chat)
+            zwischenfrage(text: trimmed)
+            return
+        }
 
         var chat = aktiverChat
         chat.nachrichten.append(ChatNachricht(

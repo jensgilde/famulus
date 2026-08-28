@@ -1,4 +1,4 @@
-// Famulus – Einstiegspunkt der nativen SwiftUI-Hülle v0.12.0.
+// Famulus – Einstiegspunkt der nativen SwiftUI-Hülle v0.12.1.
 // Dieselbe Marken-DNA wie der Tauri-Kern (ui/index.html) und
 // Famulus Games: dunkles Terminal-Design, Orange-Akzent (#F86E27),
 // Monospace. Die Logik liegt im Rust-Kern (libfamulus_core.a via UniFFI).
