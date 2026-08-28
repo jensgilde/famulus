@@ -1,5 +1,46 @@
 # Changelog
 
+## [1.0.0] – 2026-08-28
+
+### Neu
+- **`frage_nutzer`-Werkzeug (Telegram)**: Multiple-Choice-Rückfragen mit
+  2-4 anklickbaren Buttons (Inline-Keyboard) statt Fließtext. Bewusst
+  nicht-blockierend gebaut - die Antwort kommt als eigene Nachricht
+  herein, kein Warten in der Poll-Schleife.
+- **`idle_reflexion` verdrahtet**: War geschrieben, aber nie aufgerufen
+  (kein UDL-Eintrag, keine Swift-Seite). Jetzt per Timer alle 6 Stunden
+  aus der Swift-Hülle aufgerufen, wie ursprünglich dokumentiert.
+- **Chat-Zeilen**: Archivieren/Löschen jetzt über Hover-Icons direkt
+  sichtbar (vorher nur per unentdeckbarem Rechtsklick-Menü), Löschen
+  fragt jetzt vorher nach.
+- **Modell-Dropdown**: alphabetisch sortiert.
+
+### Behoben
+- **Gedächtnis fraß sich selbst**: `relevante_semantisch()` ignorierte
+  `max_erinnerungen` komplett, sobald mehr Präferenzen gespeichert waren
+  als der Deckel erlaubt (live beobachtet: 309 Präferenzen gegen einen
+  Deckel von 12 - alle 12 Plätze gingen an Präferenzen, kein Fakt/keine
+  Lektion kam mehr durch). Jetzt zweifach gefixt: harter Gesamt-Deckel
+  (`truncate`) plus Sub-Deckel, der Präferenzen auf höchstens die Hälfte
+  des Budgets begrenzt.
+- **Rückblick überverallgemeinerte einmalige Anweisungen**: "Für diesen
+  einen Audit nichts ändern" wurde wiederholt als dauerhafte Präferenz
+  gespeichert und überschwemmte spätere, ausdrücklich gegenteilige
+  Aufträge. Rückblick-Prompt jetzt mit expliziter Warnung dagegen.
+- **`art`-Tippfehler unsichtbar**: Varianten wie "präferenz" (Umlaut)
+  landeten unnormiert in der DB und fielen aus jeder Präferenz-Suche
+  raus. Jetzt normalisiert vor dem Speichern.
+- **Mutex-Poison in `memory.rs`**: ein einzelner Panic während eines
+  gehaltenen Locks hätte das Gedächtnis für den Rest des Prozesses
+  unbenutzbar gemacht. Jetzt wie in `ffi.rs` mit `into_inner()`
+  behandelt statt mit `.expect()`.
+- **`check_ask` verankert jetzt an `$HOME`** statt loser Substring-Suche
+  (`contains("/.ssh/")`) - übersah vorher den Ordner `~/.ssh` selbst und
+  griff fälschlich bei harmlosen Pfaden wie `/tmp/projekt/.ssh/config`.
+- **OpenRouter-Modellliste**: 39 nur per Batch-API erreichbare
+  `:batch`-Varianten rausgefiltert - schlugen über den normalen
+  chat/completions-Endpunkt immer fehl.
+
 ## [0.13.0] – 2026-08-28
 
 ### Entfernt

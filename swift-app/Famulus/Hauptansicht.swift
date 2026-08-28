@@ -217,25 +217,69 @@ struct ChatZeile: View {
     let loeschen: () -> Void
     let archivieren: () -> Void
     @State private var hover = false
+    @State private var zeigeLoeschenBestaetigung = false
 
     var body: some View {
-        Button(action: wahl) {
+        HStack(spacing: 0) {
             Text(chat.titel)
                 .font(.system(size: 12))
                 .foregroundStyle(aktiv ? Marke.akzent : Marke.textSekundär)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 8).padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(aktiv ? Marke.akzentGetönt : (hover ? Marke.hover : .clear)))
-                .contentShape(Rectangle())
+
+            // Nur bei Hover sichtbar, statt nur übers (unentdeckbare)
+            // Rechtsklick-Menü erreichbar - das war der Grund, warum Jens
+            // die Funktion für verschwunden hielt, obwohl der Code sie
+            // längst konnte.
+            if hover {
+                HStack(spacing: 4) {
+                    Button(action: archivieren) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Marke.textLeise)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Archivieren")
+
+                    // Löschen fragt erst nach - ein versehentlicher Klick
+                    // direkt neben "Archivieren", gleiche Größe/Farbe, hätte
+                    // sonst einen Chat unwiderruflich gelöscht.
+                    Button {
+                        zeigeLoeschenBestaetigung = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Marke.textLeise)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Löschen")
+                }
+                .transition(.opacity)
+            }
         }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
+        // Padding + contentShape VOR dem Tap-Gesture, damit die komplette
+        // Zeile (inkl. des Innenabstands, der die Hover-Fläche bildet)
+        // klickbar ist - vorher lag contentShape nur auf dem inneren
+        // Text-Button, der obere/untere Rand der Zeile war optisch aktiv
+        // (Hover-Highlight), aber nicht klickbar.
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(aktiv ? Marke.akzentGetönt : (hover ? Marke.hover : .clear)))
+        .onTapGesture(perform: wahl)
+        .onHover { istDrüber in
+            withAnimation(.easeInOut(duration: 0.15)) { hover = istDrüber }
+        }
         .contextMenu {
             Button("Archivieren", action: archivieren)
+            Button("Löschen", role: .destructive) { zeigeLoeschenBestaetigung = true }
+        }
+        .alert("Chat löschen?", isPresented: $zeigeLoeschenBestaetigung) {
+            Button("Abbrechen", role: .cancel) {}
             Button("Löschen", role: .destructive, action: loeschen)
+        } message: {
+            Text("„\(chat.titel)“ wird unwiderruflich gelöscht.")
         }
     }
 }

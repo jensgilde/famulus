@@ -9,7 +9,7 @@
 
 [package]
 name = "famulus-core"
-version = "0.13.0"
+version = "1.0.0"
 edition = "2021"
 description = "Famulus: persönlicher KI-Agent mit vollem Rechnerzugriff, austauschbarem LLM-Backend und harten Sicherheitsgrenzen."
 
