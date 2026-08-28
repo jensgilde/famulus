@@ -1,0 +1,53 @@
+// Famulus – FFI-Vertrag v0.10.0.
+// Diese Datei ist die Grenze zwischen Rust-Kern und Swift-Hülle.
+// uniffi-bindgen erzeugt daraus Swift-Bindings; Änderungen hier
+// erfordern einen Neulauf von scripts/build-ffi.sh.
+//
+// Muster: identisch zu Famulus Games (dort bewährt seit v0.2.0).
+// Komplexe Rückgaben (Modell-Listen, Presets, History) gehen als
+// JSON-String über die Grenze – derselbe Vertrag, den die Tauri-GUI
+// ans Frontend schickt. Agent-Ereignisse kommen als JSON über das
+// Callback-Interface (entspricht dem "famulus-ereignis"-Kanal der GUI).
+
+namespace famulus {
+  // ── Status & Konfiguration ────────────────────────────────────────
+  string app_version();
+  [Throws=Fehler] string zustand();
+  [Throws=Fehler] string credits();
+  [Throws=Fehler] string modelle_liste(string provider);
+  [Throws=Fehler] string setze_modell(string provider, string model);
+  [Throws=Fehler] string setze_modell_modus(string modus);
+
+  // ── Auftrag ───────────────────────────────────────────────────────
+  // verlauf_json: [{"rolle":"user"|"assistant","inhalt":"..."}]
+  // (Anhänge optional: [{"rolle":"user","inhalt":"...","anhaenge":[{"medien_typ":"image/png","base64":"..."}]}])
+  // Ereignisse kommen als JSON über das Callback (AgentEvent-Serialisierung,
+  // Feld "art" steuert die Anzeige – siehe ui/index.html der Tauri-GUI).
+  void starte_auftrag(string auftrag, string verlauf_json, AuftragsCallback cb);
+  void stoppe_auftrag();
+  void zwischenfrage(string text);
+
+  // ── System-Prompt-Presets ─────────────────────────────────────────
+  [Throws=Fehler] string presets_liste();
+  [Throws=Fehler] string presets_aktivieren(string name);
+  [Throws=Fehler] string presets_speichern(string name, string prompt);
+  [Throws=Fehler] string presets_loeschen(string name);
+
+  // ── Chat-Verlauf ──────────────────────────────────────────────────
+  [Throws=Fehler] string history_liste();
+  [Throws=Fehler] string history_suche(string begriff);
+  [Throws=Fehler] string history_speichern(string titel, string nachrichten);
+  [Throws=Fehler] void history_aktualisieren(i64 id, string titel, string nachrichten);
+  [Throws=Fehler] void history_loeschen(i64 id);
+  [Throws=Fehler] string history_archiv_liste();
+  [Throws=Fehler] void history_archivieren(i64 id, boolean archiviert);
+};
+
+callback interface AuftragsCallback {
+  void on_ereignis(string ereignis_json);
+};
+
+[Error]
+interface Fehler {
+  Nachricht(string meldung);
+};

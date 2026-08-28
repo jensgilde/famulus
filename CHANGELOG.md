@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.10.0] – 2026-08-28
+
+### Hinzugefügt
+- **Native SwiftUI-Hülle für macOS** (`swift-app/`): Famulus hat jetzt
+  eine native Swift-Oberfläche nach dem Muster von Famulus Games. Der
+  Rust-Kern bleibt derselbe; angebunden über eine UniFFI-Brücke
+  (`src/ffi.rs` + `src/ffi.udl`, staticlib). Die Tauri-GUI bleibt
+  parallel bestehen, bis die Swift-Hülle gleichwertig ist.
+- **FFI-Schicht**: `starte_auftrag` mit Callback-Streaming, Modell-/
+  Provider-Wahl, Credits, Presets, History und TOML-Schalter – alles,
+  was vorher nur die Tauri-GUI konnte, liegt jetzt im Kern und steht
+  jeder Hülle zur Verfügung.
+- Build-Pipeline: `scripts/build-ffi.sh` (staticlib + Bindings),
+  `scripts/build-app.sh` (Xcode-Build + atomarer Swap nach
+  /Applications), `swift-app/project.yml` (XcodeGen), App-Icon aus
+  dem Tauri-Icon generiert.
+
+### Behoben
+- **History-Duplikate in der Swift-Hülle**: `speichern()` rief immer
+  `historySpeichern` (INSERT) auf – bei jeder Agent-Antwort wäre eine
+  neue DB-Zeile entstanden. Die FFI hat jetzt `history_aktualisieren`
+  (UPDATE), und der Store trennt: bestehender Chat → UPDATE, neuer →
+  INSERT. Keine Duplikate mehr in `gedaechtnis.db`.
+- **`erstellt`-Feld falsch geparst**: Die DB liefert das Datum als
+  SQLite-Text (`"2026-08-28 09:35:00"`), der Store las es als `Int64`
+  → immer 0. Jetzt `DateFormatter` wie `new Date()` im Tauri-Frontend.
+
+### Geändert
+- Version-Bump auf 0.10.0 (Minor: neues Feature). Kern + FFI-Brücke.
+
 ## [0.9.6] – 2026-08-27
 
 ### Geändert

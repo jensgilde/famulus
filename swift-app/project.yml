@@ -1,0 +1,58 @@
+# Famulus – XcodeGen-Projektdefinition v0.10.0.
+# Erzeugt das Xcode-Projekt für die native SwiftUI-Hülle.
+# Aufruf: `xcodegen generate` in diesem Ordner (macht scripts/build-app.sh).
+# Muster: identisch zu Famulus Games (dort bewährt seit v0.2.1).
+name: Famulus
+
+options:
+  bundleIdPrefix: one.gilde
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+targets:
+  Famulus:
+    type: application
+    platform: macOS
+    sources:
+      - Famulus
+      - Generated
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: one.gilde.famulus
+        PRODUCT_NAME: Famulus
+        MARKETING_VERSION: "0.10.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Famulus
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        # Die App schreibt in ~/KI Agenten/famulus, startet Shell-Befehle
+        # und spricht mit lokalen Diensten – das geht nur ohne Sandbox.
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: NO
+        # FFI: statische Rust-Bibliothek + UniFFI-Modul.
+        LIBRARY_SEARCH_PATHS:
+          - $(SRCROOT)/../target/release
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/Generated
+        OTHER_SWIFT_FLAGS:
+          - -Xcc
+          - -fmodule-map-file=$(SRCROOT)/Generated/famulusFFI.modulemap
+        OTHER_LDFLAGS:
+          - -lfamulus_core
+          # Der Kern zieht reqwest (system-configuration) und native-tls -
+          # diese macOS-Frameworks muss die Huelle explizit verlinken.
+          - -framework
+          - SystemConfiguration
+          - -framework
+          - Security
+          - -framework
+          - CoreFoundation
+          - -framework
+          - CoreServices

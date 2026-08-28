@@ -1,15 +1,24 @@
+# Famulus v0.10.0 – Header-Version via env!("CARGO_PKG_VERSION")
+# (Präferenz von Jens: Version im Build aus Cargo.toml, kein manuelles Setzen.)
+#
+# v0.10.0: UniFFI-Brücke für die native Swift-Hülle (swift-app/).
+# Der Kern bleibt derselbe – die Brücke ist eine zusätzliche Schicht.
+# (Muster: Famulus Games v0.2.0, dort bewährt.)
+
 [workspace]
 members = ["gui"]
 
 [package]
 name = "famulus-core"
-version = "0.9.6"
+version = "0.10.0"
 edition = "2021"
 description = "Famulus: persönlicher KI-Agent mit vollem Rechnerzugriff, austauschbarem LLM-Backend und harten Sicherheitsgrenzen."
 
 [lib]
 name = "famulus_core"
 path = "src/lib.rs"
+# staticlib: damit die Swift-Hülle den Kern statisch einlinken kann.
+crate-type = ["lib", "staticlib"]
 
 [[bin]]
 name = "famulus"
@@ -18,6 +27,10 @@ path = "src/main.rs"
 [[bin]]
 name = "famulus-telegram"
 path = "src/bin/telegram.rs"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
 # Nur die Bausteine, die Famulus wirklich braucht - "full" zieht Netzwerk-
@@ -29,6 +42,7 @@ tokio = { version = "1", default-features = false, features = [
     "process",          # run_shell
     "io-util",          # begrenztes Lesen grosser Dateien
     "time",             # Inaktivitaets-Timeout beim Lesen von Antwort-Stuecken
+    "sync",             # mpsc-Kanal fuer Zwischenfragen (FFI-Bruecke)
 ] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 bytes = "1"  # Chunk-Typ der gestreamten LLM-Antwort
@@ -47,6 +61,11 @@ libc = "0.2"  # setpgid/kill: run_shell-Timeout muss die ganze Prozessgruppe tre
 # Datenbank wird mitkompiliert statt vom System geholt - dann haengt Famulus
 # nicht an der SQLite-Version der jeweiligen Fedora-Installation.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# UniFFI: FFI-Bruuecke zur nativen Swift-Huelle (swift-app/).
+uniffi = { version = "0.29", features = ["cli"] }
+
+[build-dependencies]
+uniffi = { version = "0.29", features = ["build"] }
 
 [dev-dependencies]
 # "test-util" nur für Tests: lässt tokio::time::pause() virtuelle Zeit sofort

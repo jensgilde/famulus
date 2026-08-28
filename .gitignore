@@ -7,3 +7,9 @@ gui/gen
 # gehören aber nicht ins Repo - das ist Jens' persönliches Wissen.
 /gedaechtnis.db
 /vault/
+
+# Swift-Hülle (swift-app/, ab v0.10.0): Build-Artefakte und generierte
+# Dateien bleiben draußen – wie bei Famulus Games.
+swift-app/build/
+swift-app/Famulus.xcodeproj/
+swift-app/Generated/
