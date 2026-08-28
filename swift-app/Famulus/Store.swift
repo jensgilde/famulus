@@ -103,6 +103,8 @@ final class FamulusStore {
         archiv = ladeChats(archiviert: true)
         ladePresets()
         aktualisiereStatus()
+        // Provider aus Config holen, damit Dropdown und Credits stimmen
+        provider = aktiverProvider()
         aktualisiereCredits()
         ladeModelle()
         if chats.isEmpty { neuerChat() }
@@ -149,6 +151,18 @@ final class FamulusStore {
             if archiviert { archiv.insert(c, at: 0) }
             if aktiverChatIndex >= chats.count { aktiverChatIndex = max(0, chats.count - 1) }
         }
+    }
+
+    /// Holt einen archivierten Chat zurück in die aktive Liste und
+    /// öffnet ihn. Wird aus der rechten Archiv-Sidebar aufgerufen.
+    func archivOeffnen(_ chat: Chat) {
+        guard let id = chat.sqliteId else { return }
+        try? historyArchivieren(id: id, archiviert: false)
+        archiv.removeAll { $0.sqliteId == id }
+        var c = chat
+        // sqliteId bleibt identisch – der Chat wird künftig aktualisiert.
+        chats.append(c)
+        aktiverChatIndex = chats.count - 1
     }
 
     // ── Auftrag ──────────────────────────────────────────────────────
@@ -411,8 +425,20 @@ final class FamulusStore {
     }
 
     private func aktualisiereCredits() {
+        let p = provider
         Task {
-            let neu = await Task.detached { (try? credits()) ?? "" }.value
+            let neu = await Task.detached { (try? creditsFuerProvider(provider: p)) ?? "" }.value
+            creditsText = neu
+        }
+    }
+
+    /// Öffentliche Variante: wird beim Provider-Wechsel in der
+    /// Kopfzeile aufgerufen, damit die Credits sofort den neuen
+    /// Provider widerspiegeln (z. B. OpenRouter).
+    func creditsAktualisieren(provider: String) {
+        creditsText = "…"
+        Task {
+            let neu = await Task.detached { (try? creditsFuerProvider(provider: provider)) ?? "" }.value
             creditsText = neu
         }
     }

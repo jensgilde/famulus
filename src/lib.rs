@@ -35,8 +35,8 @@ pub mod ui;
 // unten; `zustand`, `credits` usw. liegen in ffi.rs.
 uniffi::include_scaffolding!("ffi");
 pub use ffi::{
-    app_version, credits, history_archiv_liste, history_archivieren, history_liste,
-    history_aktualisieren, history_loeschen, history_speichern, history_suche, modelle_liste, presets_aktivieren,
-    presets_liste, presets_loeschen, presets_speichern, setze_modell, setze_modell_modus,
+    aktiver_provider, app_version, credits, credits_fuer_provider, history_archiv_liste, history_archivieren,
+    history_liste, history_aktualisieren, history_loeschen, history_speichern, history_suche, modelle_liste,
+    presets_aktivieren, presets_liste, presets_loeschen, presets_speichern, setze_modell, setze_modell_modus,
     starte_auftrag, stoppe_auftrag, zwischenfrage, zustand, AuftragsCallback, Fehler,
 };

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Famulus – native SwiftUI-App bauen + installieren (v0.10.0).
+# Famulus – native SwiftUI-App bauen + installieren (v0.11.0).
 # Atomarer Swap nach /Applications wie bei der Tauri-Variante
 # (scripts/install-mac.sh), aber für die native Swift-Hülle (swift-app/).
 # Muster: identisch zu Famulus Games scripts/build-app.sh (dort bewährt).

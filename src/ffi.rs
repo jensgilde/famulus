@@ -233,6 +233,28 @@ pub fn credits() -> Result<String, Fehler> {
         .map_err(fehler_s)
 }
 
+/// Wie credits(), aber für einen explizit gewählten Provider.
+/// Wird gebraucht, wenn der Nutzer im Dropdown den Provider
+/// wechselt, ohne dass die Config (famulus.toml) geändert wird -
+/// sonst würde credits() immer den in der Config gespeicherten
+/// Provider abfragen.
+pub fn credits_fuer_provider(provider: String) -> Result<String, Fehler> {
+    let mut config = Config::load().map_err(|e| fehler(format!("{e:#}")))?;
+    config.provider = provider;
+    RUNTIME
+        .block_on(crate::credits::anzeigen(&config))
+        .map_err(fehler_s)
+}
+
+/// Der in der Config (famulus.toml) gespeicherte Provider.
+/// Braucht die Swift-Hülle, um beim Start das Dropdown korrekt zu
+/// initialisieren und die passenden Credits anzuzeigen.
+pub fn aktiver_provider() -> String {
+    Config::load()
+        .map(|c| c.provider)
+        .unwrap_or_else(|_| "hyper".to_string())
+}
+
 /// Verfügbare Modelle eines Providers als JSON-Array (id-Feld), gleiche
 /// Logik und Filter wie gui/src/lib.rs::modelle_liste.
 pub fn modelle_liste(provider: String) -> Result<String, Fehler> {

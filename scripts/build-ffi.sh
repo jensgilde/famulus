@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Famulus – FFI-Bindings erzeugen (v0.10.0).
+# Famulus – FFI-Bindings erzeugen (v0.11.0).
 # Baut den Kern als statische Bibliothek und generiert daraus
 # die Swift-Bindings (UniFFI) nach swift-app/Generated.
 # Läuft automatisch in build-app.sh; hier einzeln aufrufbar.

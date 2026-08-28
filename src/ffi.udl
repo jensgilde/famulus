@@ -1,4 +1,4 @@
-// Famulus – FFI-Vertrag v0.10.0.
+// Famulus – FFI-Vertrag v0.11.0.
 // Diese Datei ist die Grenze zwischen Rust-Kern und Swift-Hülle.
 // uniffi-bindgen erzeugt daraus Swift-Bindings; Änderungen hier
 // erfordern einen Neulauf von scripts/build-ffi.sh.
@@ -14,6 +14,8 @@ namespace famulus {
   string app_version();
   [Throws=Fehler] string zustand();
   [Throws=Fehler] string credits();
+  [Throws=Fehler] string credits_fuer_provider(string provider);
+  string aktiver_provider();
   [Throws=Fehler] string modelle_liste(string provider);
   [Throws=Fehler] string setze_modell(string provider, string model);
   [Throws=Fehler] string setze_modell_modus(string modus);

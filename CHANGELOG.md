@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.11.0] – 2026-08-28
+
+### Geändert
+- **Swift-Hülle im Phoenix-Style**: Die native macOS-Oberfläche
+  (`swift-app/`) nutzt jetzt dieselbe Design-DNA wie Tankmonitor und
+  die Webseite: dunkle Grundfläche #1e1e1e, weicher Orange-Fade oben,
+  Akzent #f97316 (statt Braun/Schwarz-Verlauf).
+- **Chat-Übersicht links/rechts**: Was Jens schreibt, steht rechts
+  (orange getönt, Rand orange), was Famulus antwortet, links (graue
+  Fläche). Fehler rot markiert. Entspricht der Tauri-Referenz-Logik.
+- **Archiv-Sidebar rechts, ein-/ausklappbar**: Über den rechten
+  Sidebar-Button in der Kopfzeile auf-/zuklappbar. Zeigt alle
+  archivierten Chats; ein Klick holt den Chat zurück in die aktive
+  Liste und öffnet ihn.
+
+### Hinzugefügt
+- **FFI: `credits_fuer_provider(provider)`**: Guthaben für einen
+  explizit gewählten Provider. Nötig, weil `credits()` immer den in
+  der Config gespeicherten Provider liest – der Dropdown-Wechsel
+  allein ändert die Config nicht.
+- **FFI: `aktiver_provider()`**: Liefert den in famulus.toml
+  gespeicherten Provider. Braucht die Swift-Hülle, um beim Start das
+  Provider-Dropdown und die Credits korrekt zu initialisieren.
+
+### Behoben
+- **Credits zeigten immer den Config-Provider**: Das Credits-Feld in
+  der Swift-Hülle rief nur `credits()` auf – wer im Dropdown den
+  Provider wechselte (z. B. OpenRouter), sah weiter die Credits des
+  in der Config gespeicherten Providers. Jetzt fragt die Hülle
+  provider-spezifisch (`creditsFuerProvider`) und aktualisiert beim
+  Dropdown-Wechsel sofort.
+
+### Geändert (Version)
+- Version-Bump auf 0.11.0 (Minor: neue FFI-Funktionen + UI-Features).
+
+## [0.10.0] – 2026-08-28
+
+
 ## [0.10.0] – 2026-08-28
 
 ### Hinzugefügt
