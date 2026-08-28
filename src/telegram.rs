@@ -79,6 +79,9 @@ struct TgResponse<T> {
 struct Update {
     update_id: i64,
     message: Option<TgMessage>,
+    /// Button-Klick auf ein `frage_nutzer`-Inline-Keyboard, siehe
+    /// `AgentEvent::FrageAnNutzer` und `verarbeite_callback`.
+    callback_query: Option<TgCallbackQuery>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +90,32 @@ struct TgMessage {
     text: Option<String>,
     #[serde(default)]
     from: Option<TgUser>,
+    #[serde(default)]
+    message_id: i64,
+    /// Nur bei Nachrichten mit Buttons gesetzt - liefert die Beschriftung
+    /// zu einem `callback_data`-Index zurück, ohne dass wir uns die Frage
+    /// selbst irgendwo merken müssten.
+    #[serde(default)]
+    reply_markup: Option<TgReplyMarkup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TgReplyMarkup {
+    inline_keyboard: Vec<Vec<TgInlineButton>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TgInlineButton {
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TgCallbackQuery {
+    id: String,
+    /// Der Index der geklickten Option als String, siehe
+    /// `send_message_mit_optionen` (callback_data = Options-Index).
+    data: Option<String>,
+    message: Option<TgMessage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,6 +182,79 @@ async fn send_message(client: &reqwest::Client, token: &str, chat_id: i64, text:
         }
     }
     Ok(())
+}
+
+/// Schickt eine Frage mit anklickbaren Optionen (Inline-Keyboard, eine
+/// Option pro Zeile). `callback_data` ist bewusst nur der Index als String,
+/// nicht der Options-Text selbst: Telegram deckelt `callback_data` auf 64
+/// Byte, und die Beschriftung lässt sich beim Klick ohnehin verlustfrei aus
+/// `callback_query.message.reply_markup` zurücklesen (siehe
+/// `verarbeite_callback`) - kein Extra-Zustand nötig.
+async fn send_message_mit_optionen(
+    client: &reqwest::Client,
+    token: &str,
+    chat_id: i64,
+    text: &str,
+    optionen: &[String],
+) -> Result<()> {
+    let inline_keyboard: Vec<Vec<serde_json::Value>> = optionen
+        .iter()
+        .enumerate()
+        .map(|(i, opt)| vec![serde_json::json!({ "text": opt, "callback_data": i.to_string() })])
+        .collect();
+    let url = format!("{API_BASE}/bot{token}/sendMessage");
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": { "inline_keyboard": inline_keyboard },
+        }))
+        .send()
+        .await
+        .context("sendMessage (mit Optionen) fehlgeschlagen")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("sendMessage (mit Optionen) HTTP {status}: {body}");
+    }
+    Ok(())
+}
+
+/// Beendet den "lädt..."-Zustand des geklickten Buttons. Rein kosmetisch -
+/// ein Fehlschlag hier darf die eigentliche Verarbeitung nicht aufhalten,
+/// deshalb wird der Fehler nur geloggt statt weitergereicht.
+async fn beantworte_callback(client: &reqwest::Client, token: &str, callback_id: &str) {
+    let url = format!("{API_BASE}/bot{token}/answerCallbackQuery");
+    if let Err(e) = client
+        .post(&url)
+        .json(&serde_json::json!({ "callback_query_id": callback_id }))
+        .send()
+        .await
+    {
+        eprintln!("[telegram] answerCallbackQuery fehlgeschlagen: {e:#}");
+    }
+}
+
+/// Entfernt die Buttons einer beantworteten Frage, damit derselbe Klick
+/// nicht zweimal einen Auftrag auslösen kann. Best-effort wie oben.
+async fn entferne_buttons(client: &reqwest::Client, token: &str, chat_id: i64, message_id: i64) {
+    if message_id == 0 {
+        return;
+    }
+    let url = format!("{API_BASE}/bot{token}/editMessageReplyMarkup");
+    if let Err(e) = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reply_markup": { "inline_keyboard": [] },
+        }))
+        .send()
+        .await
+    {
+        eprintln!("[telegram] editMessageReplyMarkup fehlgeschlagen: {e:#}");
+    }
 }
 
 /// Teilt Text an Zeilengrenzen in Telegram-taugliche Stücke. Reine
@@ -378,6 +480,11 @@ async fn bearbeite_nachricht(
                         )
                         .await;
                     }
+                    Some(AgentEvent::FrageAnNutzer { frage, optionen }) => {
+                        if let Err(e) = send_message_mit_optionen(client, token, chat_id, &frage, &optionen).await {
+                            eprintln!("[telegram] Rückfrage senden fehlgeschlagen: {e:#}");
+                        }
+                    }
                     Some(_) => {}
                     None => {}
                 }
@@ -440,6 +547,39 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
 
         for update in updates {
             offset = offset.max(update.update_id + 1);
+
+            // Button-Klick auf eine `frage_nutzer`-Frage: die Antwort setzt
+            // den Auftrag genau wie eine getippte Nachricht fort, siehe
+            // tools/frage_nutzer.rs für die Begründung des Designs.
+            if let Some(cb) = update.callback_query {
+                beantworte_callback(&client, &cfg.token, &cb.id).await;
+
+                let Some(msg) = &cb.message else { continue };
+                let chat_id = msg.chat.id;
+                if !cfg.allowed_chat_ids.contains(&chat_id) {
+                    continue;
+                }
+                let gewaehlt = cb
+                    .data
+                    .as_deref()
+                    .and_then(|d| d.parse::<usize>().ok())
+                    .and_then(|i| msg.reply_markup.as_ref().map(|m| (i, m)))
+                    .and_then(|(i, markup)| markup.inline_keyboard.get(i))
+                    .and_then(|zeile| zeile.first())
+                    .map(|knopf| knopf.text.clone());
+
+                let Some(text) = gewaehlt else {
+                    eprintln!("[telegram] Button-Klick ohne auflösbare Option (chat_id={chat_id})");
+                    continue;
+                };
+
+                entferne_buttons(&client, &cfg.token, chat_id, msg.message_id).await;
+
+                println!("[telegram] Button-Antwort von chat_id={chat_id}: {text}");
+                let verlauf = verlaeufe.entry(chat_id).or_default();
+                bearbeite_nachricht(&client, &cfg.token, chat_id, text, verlauf).await;
+                continue;
+            }
 
             let Some(msg) = update.message else { continue };
             let Some(text) = msg.text else { continue };

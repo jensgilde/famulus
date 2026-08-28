@@ -32,6 +32,11 @@ pub enum AgentEvent {
     /// parallelen Aufruf, nicht aus dem laufenden Hauptauftrag, siehe
     /// `agent.rs::run_task` (Zwischenfragen-Block).
     ZwischenfrageAntwort { frage: String, text: String },
+    /// Eine Multiple-Choice-Rückfrage an den Nutzer, mit anklickbaren
+    /// Optionen (Telegram: Inline-Buttons). Die Antwort kommt NICHT über
+    /// dieses Ereignis zurück, sondern als ganz normale, neue Nachricht -
+    /// siehe `tools/frage_nutzer.rs`.
+    FrageAnNutzer { frage: String, optionen: Vec<String> },
     /// Der Auftrag ist fertig (finale Antwort wurde schon via Text gesendet).
     Fertig,
     /// Der Auftrag ist abgebrochen (Fehler oder Limit erreicht).
@@ -91,6 +96,12 @@ impl Ui for TerminalUi {
             }
             AgentEvent::ZwischenfrageAntwort { frage, text } => {
                 println!("\n{}", format!("  ↩ Zu \"{frage}\": {text}").cyan());
+            }
+            AgentEvent::FrageAnNutzer { frage, optionen } => {
+                println!("\n{}", format!("  ❓ {frage}").cyan().bold());
+                for (i, option) in optionen.iter().enumerate() {
+                    println!("{}", format!("     {}. {option}", i + 1).cyan());
+                }
             }
             AgentEvent::Fertig => {
                 println!("\n{}", "✔ Fertig".green().bold());
@@ -166,6 +177,13 @@ mod tests {
                     text: "14 Uhr".into(),
                 },
                 "zwischenfrage_antwort",
+            ),
+            (
+                AgentEvent::FrageAnNutzer {
+                    frage: "welche größe?".into(),
+                    optionen: vec!["klein".into(), "groß".into()],
+                },
+                "frage_an_nutzer",
             ),
             (AgentEvent::Fertig, "fertig"),
             (

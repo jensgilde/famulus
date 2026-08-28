@@ -20,6 +20,7 @@ pub mod shell;
 pub mod vault;
 pub mod notizbuch;
 pub mod selbstmodell;
+pub mod frage_nutzer;
 
 /// Stellt die Werkzeuge zusammen, die dem Modell angeboten werden.
 ///

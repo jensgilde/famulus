@@ -94,6 +94,18 @@ impl Agent {
             .map(|t| (t.definition().name.clone(), t))
             .collect();
 
+        // ── Rückfragen-Werkzeug: meldet Frage+Optionen nur als Ereignis,
+        // blockiert nicht - siehe tools/frage_nutzer.rs für die Begründung.
+        // Für jede Oberfläche sicher: Telegram rendert Buttons, TerminalUi
+        // druckt die Optionen als Text, GUI ignoriert unbekannte Ereignisse
+        // ohnehin (siehe ui.rs-Test `ereignis_kodierung_passt_zum_frontend`).
+        {
+            let frage_werkzeug = Box::new(crate::tools::frage_nutzer::FrageNutzerTool {
+                ui: Arc::clone(&ui),
+            });
+            tools.insert(frage_werkzeug.definition().name.clone(), frage_werkzeug);
+        }
+
         // ── Stufe 3: Notizbuch-Tool hinzufügen ─
         if let Some(ref g) = gedaechtnis {
             let notizbuch = Box::new(NotizbuchTool {
