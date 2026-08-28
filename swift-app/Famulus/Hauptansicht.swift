@@ -1,4 +1,4 @@
-// Famulus – Hauptansicht der nativen SwiftUI-Hülle v0.11.0.
+// Famulus – Hauptansicht der nativen SwiftUI-Hülle v0.12.0.
 // Phoenix-Style wie Tankmonitor und die Webseite: dunkle Grundfläche
 // #1e1e1e, weicher Orange-Fade oben, Akzent #f97316.
 //
@@ -165,6 +165,11 @@ struct ArchivSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Preset-Bereich (wie in der Tauri-GUI): Dropdown + Prompt + Speichern/Löschen
+            PresetPanel(store: store)
+
+            Divider().overlay(Marke.rand)
+
             HStack {
                 Text("Archiv")
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
@@ -484,5 +489,110 @@ struct SchrittZeile: View {
                     .background(RoundedRectangle(cornerRadius: 4).fill(Marke.eingabe))
             }
         }
+    }
+}
+
+
+// ── Preset-Bereich (rechte Sidebar, wie in der Tauri-GUI) ────────────────
+
+struct PresetPanel: View {
+    @Bindable var store: FamulusStore
+    @State private var promptText = ""
+
+    private var letztesPreset: Bool { store.presets.count <= 1 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            PresetAuswahl(store: store, promptText: $promptText)
+
+            TextEditor(text: $promptText)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(Marke.text)
+                .frame(height: 90)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Marke.eingabe))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Marke.rand, lineWidth: 1))
+
+            HStack(spacing: 6) {
+                Spacer()
+                Button {
+                    store.presetSpeichern(promptText)
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? Marke.textHauch : Marke.akzent)
+                .disabled(promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Preset speichern")
+
+                Button {
+                    store.presetLoeschen()
+                    promptText = store.presets.first(where: { $0.name == store.aktivesPreset })?.prompt ?? ""
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(letztesPreset ? Marke.textHauch : Marke.gefahr)
+                .disabled(letztesPreset)
+                .help("Preset löschen")
+            }
+        }
+        .padding(12)
+        .onAppear {
+            promptText = store.presets.first(where: { $0.name == store.aktivesPreset })?.prompt ?? ""
+        }
+        .onChange(of: store.aktivesPreset) { _, _ in
+            promptText = store.presets.first(where: { $0.name == store.aktivesPreset })?.prompt ?? ""
+        }
+    }
+}
+
+// Dropdown für die Preset-Auswahl (Menu-Stil, wie die Modell-Auswahl)
+struct PresetAuswahl: View {
+    @Bindable var store: FamulusStore
+    @Binding var promptText: String
+
+    var body: some View {
+        Menu {
+            ForEach(store.presets) { preset in
+                Button {
+                    store.presetAktivieren(preset.name)
+                } label: {
+                    if preset.name == store.aktivesPreset {
+                        Label(preset.name, systemImage: "checkmark")
+                    } else {
+                        Text(preset.name)
+                    }
+                }
+            }
+        } label: {
+            HStack {
+                Text(store.aktivesPreset ?? "Standard")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Marke.text)
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Marke.textLeise)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Marke.eingabe))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Marke.rand, lineWidth: 1))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
     }
 }

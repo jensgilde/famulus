@@ -1,4 +1,4 @@
-// Famulus – Zustandsmodell der nativen SwiftUI-Hülle v0.10.0.
+// Famulus – Zustandsmodell der nativen SwiftUI-Hülle v0.12.0.
 // Ruft den Rust-Kern über die UniFFI-Bindings (Generated/).
 // Dieselbe Ereignis-Logik wie ui/index.html der Tauri-GUI:
 // Agent-Ereignisse kommen als JSON über das AuftragsCallback und
@@ -391,6 +391,22 @@ final class FamulusStore {
 
     func presetAktivieren(_ name: String) {
         _ = try? presetsAktivieren(name: name)
+        ladePresets()
+    }
+
+    /// Speichert den Prompt unter dem aktiven Preset-Namen (wie die Tauri-GUI).
+    func presetSpeichern(_ prompt: String) {
+        let bereinigt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bereinigt.isEmpty, let name = aktivesPreset else { return }
+        _ = try? presetsSpeichern(name: name, prompt: bereinigt)
+        ladePresets()
+    }
+
+    /// Löscht das aktive Preset. Das letzte verbleibende Preset kann nicht
+    /// gelöscht werden – der Kern verweigert das bereits, wir prüfen vor.
+    func presetLoeschen() {
+        guard let name = aktivesPreset, presets.count > 1 else { return }
+        _ = try? presetsLoeschen(name: name)
         ladePresets()
     }
 

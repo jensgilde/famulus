@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0] – 2026-08-28
+
+### Hinzugefügt
+- **Preset-Panel in der rechten Seitenleiste** (wie in der Tauri-GUI):
+  Ein Preset-Dropdown über dem Archiv, darunter eine editierbare
+  Prompt-Textarea und die beiden Aktionen Speichern (✓) und Löschen
+  (✕). Das letzte verbleibende Preset lässt sich nicht löschen –
+  der Kern verweigert das bereits, der Löschen-Button ist dann
+  deaktiviert.
+- **Store: `presetSpeichern(_:)` und `presetLoeschen()`**: Die beiden
+  FFI-Funktionen `presetsSpeichern`/`presetsLoeschen` sind jetzt
+  angebunden (Aktivieren und Laden existierten schon).
+
 ## [0.11.0] – 2026-08-28
 
 ### Geändert

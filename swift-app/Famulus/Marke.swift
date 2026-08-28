@@ -1,4 +1,4 @@
-// Famulus – Design-Tokens der nativen SwiftUI-Hülle v0.11.0.
+// Famulus – Design-Tokens der nativen SwiftUI-Hülle v0.12.0.
 // Phoenix-inspirierter Style, identisch mit Tankmonitor und der
 // Webseite: dunkle Grundfläche #1e1e1e, weicher Orange-Fade oben,
 // Akzent #f97316. Magenta ist seit 2026-08-27 dauerhaft raus.
