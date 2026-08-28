@@ -7,6 +7,7 @@
 import SwiftUI
 import Observation
 import AppKit
+import Foundation
 
 // ── Datenmodelle ────────────────────────────────────────────────────────
 
@@ -110,6 +111,7 @@ final class FamulusStore {
     let version = appVersion()
 
     private var senke: AuftragsSenke?
+    private var idleReflexionTimer: Timer?
 
     // ── Initial laden ────────────────────────────────────────────────
 
@@ -123,6 +125,19 @@ final class FamulusStore {
         aktualisiereCredits()
         ladeModelle()
         if chats.isEmpty { neuerChat() }
+        starteIdleReflexion()
+    }
+
+    /// Startet die Hintergrund-Wartung (Provider-Statistik + Gedächtnis-
+    /// Kennzahlen als Notiz), alle 6 Stunden - wie in `idle_reflexion()`
+    /// (memory.rs) dokumentiert, aber bisher nie tatsächlich aufgerufen:
+    /// kein UDL-Eintrag, keine Swift-Seite. Läuft off-main-thread wegen
+    /// der SQLite-I/O, macht aber keine Netzwerk-Aufrufe.
+    private func starteIdleReflexion() {
+        idleReflexionTimer?.invalidate()
+        idleReflexionTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { _ in
+            Task.detached { idleReflexion() }
+        }
     }
 
     var aktiverChat: Chat {
@@ -505,7 +520,9 @@ final class FamulusStore {
             }.value
             if let daten = modelle.data(using: .utf8),
                let roh = try? JSONSerialization.jsonObject(with: daten) as? [[String: Any]] {
-                verfuegbareModelle = roh.compactMap { $0["id"] as? String }
+                verfuegbareModelle = roh
+                    .compactMap { $0["id"] as? String }
+                    .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             }
         }
     }

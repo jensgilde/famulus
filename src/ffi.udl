@@ -43,6 +43,14 @@ namespace famulus {
   [Throws=Fehler] void history_loeschen(i64 id);
   [Throws=Fehler] string history_archiv_liste();
   [Throws=Fehler] void history_archivieren(i64 id, boolean archiviert);
+
+  // ── Hintergrund-Wartung ───────────────────────────────────────────
+  // Aktualisiert Provider-Statistik und Gedächtnis-Kennzahlen als Notiz.
+  // Von der Swift-Hülle per Timer alle 6 Stunden aufzurufen (siehe
+  // FamulusStore.starteIdleReflexion) - macht selbst keine Netzwerk-
+  // Aufrufe, blockiert also nicht lange, sollte aber trotzdem nicht auf
+  // dem Main-Thread laufen (SQLite-I/O).
+  void idle_reflexion();
 };
 
 callback interface AuftragsCallback {

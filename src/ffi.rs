@@ -591,6 +591,13 @@ pub fn history_archivieren(id: i64, archiviert: bool) -> Result<(), Fehler> {
         .map_err(|e| fehler(format!("{e:#}")))
 }
 
+/// Dünner FFI-Durchgriff auf `memory::idle_reflexion` - war bisher
+/// geschrieben, aber nie von irgendwoher aufgerufen (kein UDL-Eintrag,
+/// keine Swift-Seite). Siehe `FamulusStore.starteIdleReflexion`.
+pub fn idle_reflexion() {
+    crate::memory::idle_reflexion();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

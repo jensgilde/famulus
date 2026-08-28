@@ -72,6 +72,21 @@ pub fn normalisiere_art(art: &str) -> &'static str {
 /// `ollama pull nomic-embed-text` (274 MB, kein extra Server-Flag nötig).
 const EMBEDDING_MODELL: &str = "nomic-embed-text";
 
+/// Höchstens so viele Präferenzen dürfen von einem Erinnerungs-Budget
+/// belegt werden - der Rest bleibt für Fakten/Lektionen reserviert.
+///
+/// Ohne diesen Sub-Deckel füllen Präferenzen (die immer zuerst und
+/// unabhängig vom Auftrag geladen werden, siehe `relevante()`/
+/// `relevante_semantisch()`) bei genug gespeicherten Einträgen das
+/// gesamte Budget allein: live beobachtet mit 309 Präferenzen gegen
+/// `hoechstens = 12` - kein einziger Fakt oder keine Lektion kam mehr
+/// durch, egal wie relevant. Die Hälfte des Budgets für Präferenzen ist
+/// ein Kompromiss: sie bleiben "immer dabei" (wie dokumentiert gewollt),
+/// aber nicht auf Kosten von allem anderen.
+fn praeferenz_limit(hoechstens: usize) -> usize {
+    hoechstens.div_ceil(2).max(1)
+}
+
 pub struct Gedaechtnis {
     verbindung: Mutex<Connection>,
 }
@@ -239,8 +254,12 @@ impl Gedaechtnis {
     pub fn relevante(&self, auftrag: &str, hoechstens: usize) -> Result<Vec<Erinnerung>> {
         let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
 
-        // 1. Alle Präferenzen – immer relevant, unabhängig vom Auftrag.
-        let praefs = verbindung
+        // 1. Alle Präferenzen laden – immer relevant, unabhängig vom
+        // Auftrag – aber nur bis zum Sub-Deckel in `ergebnis` übernehmen,
+        // siehe praeferenz_limit(). `gesehen` bekommt trotzdem ALLE
+        // Präferenzen, damit eine dadurch ausgeschlossene Präferenz nicht
+        // über den Keyword-Fallback unten nochmal als "Fakt" reinrutscht.
+        let alle_praefs = verbindung
             .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC")?
             .query_map(params![ART_PRAEFERENZ], |zeile| {
                 Ok(Erinnerung {
@@ -251,11 +270,14 @@ impl Gedaechtnis {
             .filter_map(|r| r.ok())
             .collect::<Vec<_>>();
 
-        let mut gesehen: std::collections::HashSet<String> = praefs
+        let mut gesehen: std::collections::HashSet<String> = alle_praefs
             .iter()
             .map(|e| e.inhalt.clone())
             .collect();
-        let mut ergebnis = praefs;
+        let mut ergebnis: Vec<Erinnerung> = alle_praefs
+            .into_iter()
+            .take(praeferenz_limit(hoechstens))
+            .collect();
 
         // 2. FTS5-Suche für den Rest (falls die Tabelle existiert).
         let fts_ok = verbindung
@@ -503,8 +525,13 @@ impl Gedaechtnis {
         auftrag: &str,
         hoechstens: usize,
     ) -> Result<Vec<Erinnerung>> {
-        // 1. Alle Präferenzen (immer relevant). Sperre wird vor dem
-        // Netzwerk-Aufruf unten wieder freigegeben, siehe embedding_speichern.
+        // 1. Alle Präferenzen laden (immer relevant), aber nur bis zum
+        // Sub-Deckel in `ergebnis` übernehmen - siehe praeferenz_limit()
+        // und den Kommentar dort. `gesehen` bekommt trotzdem ALLE
+        // Präferenzen, damit eine dadurch ausgeschlossene Präferenz nicht
+        // über die semantische Suche unten nochmal reinrutscht. Sperre
+        // wird vor dem Netzwerk-Aufruf unten wieder freigegeben, siehe
+        // embedding_speichern.
         let mut gesehen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut ergebnis: Vec<Erinnerung> = {
             let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
@@ -523,7 +550,7 @@ impl Gedaechtnis {
                     r.ok()
                 })
                 .collect();
-            gefunden
+            gefunden.into_iter().take(praeferenz_limit(hoechstens)).collect()
         };
 
         // 2. Query-Embedding berechnen (kein Lock gehalten während des Awaits).
@@ -1021,5 +1048,25 @@ mod tests {
     fn unbekannte_art_faellt_auf_fakt_zurueck() {
         assert_eq!(normalisiere_art("irgendwas"), ART_FAKT);
         assert_eq!(normalisiere_art(""), ART_FAKT);
+    }
+
+    // ── praeferenz_limit ────────────────────────────────────────────────
+
+    #[test]
+    fn praeferenz_limit_ist_hoechstens_die_haelfte() {
+        assert_eq!(praeferenz_limit(12), 6);
+        assert_eq!(praeferenz_limit(1), 1);
+        assert_eq!(praeferenz_limit(3), 2);
+        assert_eq!(praeferenz_limit(0), 1); // .max(1): nie 0, sonst keine Präferenzen mehr
+    }
+
+    /// Der eigentliche Vorfall: 309 Präferenzen gegen ein Budget von 12 -
+    /// vorher landeten alle 12 Slots bei Präferenzen, jetzt bleibt die
+    /// Hälfte für Fakten/Lektionen frei.
+    #[test]
+    fn praeferenz_limit_laesst_platz_fuer_fakten_bei_vielen_praeferenzen() {
+        let limit = praeferenz_limit(12);
+        assert!(limit < 12, "muss unter dem Gesamtbudget bleiben");
+        assert_eq!(12 - limit, 6, "6 Slots müssen für Fakten/Lektionen übrig bleiben");
     }
 }
