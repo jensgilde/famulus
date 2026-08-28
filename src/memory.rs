@@ -556,6 +556,14 @@ impl Gedaechtnis {
             ergebnis.push(e);
         }
 
+        // Deckel durchsetzen: Schritt 1 lädt ALLE Präferenzen ungedeckelt
+        // (siehe Kommentar oben) - ohne dieses truncate() ignoriert die
+        // semantische Suche `hoechstens`/`max_erinnerungen` komplett, sobald
+        // mehr Präferenzen existieren als der Deckel erlaubt (bei über 300
+        // Präferenzen real beobachtet: alle landeten im Prompt). `relevante()`
+        // (FTS-Pfad) macht das schon so, siehe dort.
+        ergebnis.truncate(hoechstens);
+
         Ok(ergebnis)
     }
 
