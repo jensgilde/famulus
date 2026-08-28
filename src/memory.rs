@@ -47,6 +47,27 @@ pub const ART_PRAEFERENZ: &str = "praeferenz"; // wie Jens Dinge haben will
 pub const ART_FAKT: &str = "fakt"; // wie das System/Projekt beschaffen ist
 pub const ART_LEKTION: &str = "lektion"; // was beim Arbeiten schiefging
 
+/// Normiert eine vom Modell frei gewählte `art` auf eine der drei Kategorien.
+/// Ohne das landen Tippfehler-Varianten ("präferenz" mit Umlaut, "praferenz"
+/// ohne e - real in der DB gefunden) als eigene, exakte Strings in der
+/// Tabelle. Da `relevante()`/`relevante_semantisch()` mit `WHERE art = ?1`
+/// exakt auf `ART_PRAEFERENZ` filtern, fallen solche Varianten aus jeder
+/// Präferenz-Injektion raus, tauchen aber im Fallback fälschlich als
+/// "Fakt"/"Lektion" auf - unsichtbare Dubletten, die nie bereinigt werden.
+pub fn normalisiere_art(art: &str) -> &'static str {
+    let a = art
+        .trim()
+        .to_lowercase()
+        .replace('ä', "ae")
+        .replace('ö', "oe")
+        .replace('ü', "ue");
+    match a.as_str() {
+        "praeferenz" | "preferenz" | "praferenz" => ART_PRAEFERENZ,
+        "lektion" | "lection" => ART_LEKTION,
+        _ => ART_FAKT,
+    }
+}
+
 /// Dediziertes Embedding-Modell für Stufe 2. Muss vorher gepullt sein:
 /// `ollama pull nomic-embed-text` (274 MB, kein extra Server-Flag nötig).
 const EMBEDDING_MODELL: &str = "nomic-embed-text";
@@ -176,7 +197,7 @@ impl Gedaechtnis {
         if inhalt.is_empty() {
             return Ok(false);
         }
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         let geaendert = verbindung.execute(
             "INSERT OR IGNORE INTO erinnerungen (art, inhalt, quelle) VALUES (?1, ?2, ?3)",
             (art, inhalt, quelle),
@@ -191,7 +212,7 @@ impl Gedaechtnis {
         let neu = self.merken(art, inhalt, quelle)?;
         if neu {
             let id: Option<i64> = {
-                let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+                let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
                 verbindung
                     .query_row(
                         "SELECT id FROM erinnerungen WHERE inhalt = ?1",
@@ -216,7 +237,7 @@ impl Gedaechtnis {
     /// Fällt FTS5 aus (z.B. weil die Tabelle noch nicht existiert), greift
     /// die alte Keyword-Matching-Methode als Rückfall.
     pub fn relevante(&self, auftrag: &str, hoechstens: usize) -> Result<Vec<Erinnerung>> {
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
 
         // 1. Alle Präferenzen – immer relevant, unabhängig vom Auftrag.
         let praefs = verbindung
@@ -320,7 +341,7 @@ impl Gedaechtnis {
 
     /// Baut den FTS5-Index für den Vault neu auf.
     pub fn vault_index_aktualisieren(&self, vault_wurzel: &Path) -> Result<usize> {
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
 
         // Alten Index löschen.
         verbindung.execute("DELETE FROM vault_idx", [])?;
@@ -346,7 +367,7 @@ impl Gedaechtnis {
         begriff: &str,
         hoechstens: usize,
     ) -> Result<Vec<(String, String)>> {
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
 
         // Prüfen, ob der Index existiert und nicht leer ist.
         let count: i64 = verbindung.query_row(
@@ -439,7 +460,7 @@ impl Gedaechtnis {
     /// aufs Gedächtnis (z.B. die GUI, die parallel den Chatverlauf liest).
     pub async fn embedding_speichern(&self, id: i64) -> Result<bool> {
         let inhalt = {
-            let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+            let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
             let hat: bool = verbindung.query_row(
                 "SELECT count(*) > 0 FROM erinnerungen_embedding WHERE id = ?1",
                 params![id],
@@ -461,7 +482,7 @@ impl Gedaechtnis {
                     .iter()
                     .flat_map(|f| f.to_le_bytes())
                     .collect();
-                let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+                let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
                 verbindung.execute(
                     "INSERT OR REPLACE INTO erinnerungen_embedding (id, embedding) VALUES (?1, ?2)",
                     params![id, bytes],
@@ -486,7 +507,7 @@ impl Gedaechtnis {
         // Netzwerk-Aufruf unten wieder freigegeben, siehe embedding_speichern.
         let mut gesehen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut ergebnis: Vec<Erinnerung> = {
-            let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+            let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
             let gefunden: Vec<Erinnerung> = verbindung
                 .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC")?
                 .query_map(params![ART_PRAEFERENZ], |zeile| {
@@ -516,7 +537,7 @@ impl Gedaechtnis {
 
         // 3. Alle gespeicherten Embeddings laden und vergleichen.
         let mut bewertet: Vec<(f32, Erinnerung)> = {
-            let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+            let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = verbindung.prepare(
                 "SELECT e.id, e.art, e.inhalt, em.embedding
                  FROM erinnerungen e
@@ -579,7 +600,7 @@ impl Gedaechtnis {
         }
 
         let fehlende: Vec<(i64, String)> = {
-            let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+            let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
             let gefunden: Vec<(i64, String)> = verbindung
                 .prepare(
                     "SELECT e.id, e.inhalt
@@ -611,7 +632,7 @@ impl Gedaechtnis {
         if inhalt.is_empty() {
             return Ok(());
         }
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         verbindung.execute(
             "INSERT INTO notizbuch (inhalt) VALUES (?1)",
             params![inhalt],
@@ -621,7 +642,7 @@ impl Gedaechtnis {
 
     /// Liest alle Notizen aus dem aktuellen Auftrag.
     pub fn notizbuch_lesen(&self) -> Result<Vec<String>> {
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         let notizen = verbindung
             .prepare("SELECT inhalt FROM notizbuch ORDER BY id ASC")?
             .query_map([], |zeile| zeile.get(0))?
@@ -632,7 +653,7 @@ impl Gedaechtnis {
 
     /// Löscht alle Notizen (nachdem sie konsolidiert wurden).
     pub fn notizbuch_leeren(&self) -> Result<()> {
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         verbindung.execute("DELETE FROM notizbuch", [])?;
         Ok(())
     }
@@ -649,7 +670,7 @@ impl Gedaechtnis {
         erfolg: bool,
         dauer_ms: u64,
     ) -> Result<()> {
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         verbindung.execute(
             "INSERT INTO provider_statistik (provider, erfolg, dauer_ms) VALUES (?1, ?2, ?3)",
             params![provider, erfolg as i64, dauer_ms as i64],
@@ -660,7 +681,7 @@ impl Gedaechtnis {
     /// Erfolgsquote und Durchschnittslatenz je Provider, absteigend nach
     /// Aufrufzahl. `erfolgsquote` ist 0.0-1.0 (SQLite AVG über 0/1-Werte).
     pub fn provider_statistik(&self) -> Result<Vec<ProviderStatistik>> {
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = verbindung.prepare(
             "SELECT provider, count(*), avg(erfolg), avg(dauer_ms)
              FROM provider_statistik
@@ -682,7 +703,7 @@ impl Gedaechtnis {
     }
 
     pub fn anzahl(&self) -> Result<usize> {
-        let verbindung = self.verbindung.lock().expect("Gedächtnis vergiftet");
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         let n: i64 = verbindung.query_row("SELECT count(*) FROM erinnerungen", [], |r| r.get(0))?;
         Ok(n as usize)
     }
@@ -974,5 +995,31 @@ mod tests {
         assert!((openrouter.erfolgsquote - 1.0).abs() < 0.001);
 
         std::fs::remove_file(pfad).ok();
+    }
+
+    // ── normalisiere_art ────────────────────────────────────────────────
+
+    #[test]
+    fn normalisiert_kanonische_werte_unveraendert() {
+        assert_eq!(normalisiere_art("praeferenz"), ART_PRAEFERENZ);
+        assert_eq!(normalisiere_art("fakt"), ART_FAKT);
+        assert_eq!(normalisiere_art("lektion"), ART_LEKTION);
+    }
+
+    /// Genau die Tippfehler-Varianten, die real in der DB gefunden wurden
+    /// (Umlaut bzw. fehlendes "e") und dadurch aus jeder Präferenz-Suche
+    /// rausfielen, weil `WHERE art = 'praeferenz'` exakt vergleicht.
+    #[test]
+    fn faengt_bekannte_tippfehler_ab() {
+        assert_eq!(normalisiere_art("präferenz"), ART_PRAEFERENZ);
+        assert_eq!(normalisiere_art("praferenz"), ART_PRAEFERENZ);
+        assert_eq!(normalisiere_art("Präferenz"), ART_PRAEFERENZ);
+        assert_eq!(normalisiere_art("PRAEFERENZ"), ART_PRAEFERENZ);
+    }
+
+    #[test]
+    fn unbekannte_art_faellt_auf_fakt_zurueck() {
+        assert_eq!(normalisiere_art("irgendwas"), ART_FAKT);
+        assert_eq!(normalisiere_art(""), ART_FAKT);
     }
 }

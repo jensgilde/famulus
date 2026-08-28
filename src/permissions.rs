@@ -44,12 +44,24 @@ impl PermissionManager {
     /// Prüft, ob ein Pfad eine Rückfrage erfordert (Force-Push, Secret-Pfade).
     /// Diese Check geschieht zusätzlich zu check_path – auch erlaubte Pfade
     /// können eine Ask-Entscheidung auslösen.
+    ///
+    /// Verankert an `$HOME`, nicht als roher Substring-Test: eine reine
+    /// `contains("/.ssh/")`-Prüfung übersah den Ordner `~/.ssh` selbst (kein
+    /// `/` danach, wenn kein Dateiname folgt) und griff andererseits auch bei
+    /// harmlosen Pfaden wie `/tmp/projekt/.ssh/config`, die nichts mit den
+    /// echten Zugangsdaten zu tun haben. `Path::starts_with` vergleicht
+    /// Pfad-Komponenten statt Zeichenketten - `~/.ssh-backup` triggert damit
+    /// auch nicht mehr fälschlich als Präfix-Treffer auf `~/.ssh`.
     pub fn check_ask(&self, path: &Path) -> Decision {
         let candidate = resolve_for_check(path);
-        let s = candidate.to_string_lossy();
-        // Sensible Pfade, die IMMER eine Rückfrage erfordern.
-        if s.contains("/.ssh/") || s.contains("/.gnupg/") || s.contains("/.aws/") || s.contains("/.password-store/") {
-            return Decision::Ask;
+        const SENSIBLE_ORDNER: &[&str] = &[".ssh", ".gnupg", ".aws", ".password-store"];
+        if let Some(home) = dirs::home_dir().map(|h| resolve_for_check(&h)) {
+            for name in SENSIBLE_ORDNER {
+                let sensibel = home.join(name);
+                if candidate == sensibel || candidate.starts_with(&sensibel) {
+                    return Decision::Ask;
+                }
+            }
         }
         Decision::Allow
     }
@@ -223,5 +235,58 @@ mod tests {
         std::fs::create_dir_all(sb.root.join("gesperrt_backup")).unwrap();
         let p = sb.root.join("gesperrt_backup/datei.txt");
         assert_eq!(sb.manager().check_path(&p), Decision::Allow);
+    }
+
+    // ── check_ask: sensible Pfade unter $HOME ──────────────────────────
+
+    #[test]
+    fn datei_in_ssh_ordner_erfordert_rueckfrage() {
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        assert_eq!(
+            manager.check_ask(Path::new("~/.ssh/id_ed25519")),
+            Decision::Ask
+        );
+    }
+
+    /// Der Ordner selbst, ohne Datei dahinter - die alte Substring-Prüfung
+    /// (`contains("/.ssh/")`) übersah genau diesen Fall, weil kein `/` mehr
+    /// folgt.
+    #[test]
+    fn ssh_ordner_selbst_erfordert_rueckfrage() {
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        assert_eq!(manager.check_ask(Path::new("~/.ssh")), Decision::Ask);
+    }
+
+    /// Ein Ordner, der nur zufällig mit demselben Namen beginnt, darf nicht
+    /// mitgetriggert werden - genau das Gegenstück zu
+    /// `namensaehnliches_verzeichnis_wird_erlaubt` oben, nur für check_ask.
+    #[test]
+    fn aehnlich_benannter_ordner_loest_keine_rueckfrage_aus() {
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        assert_eq!(
+            manager.check_ask(Path::new("~/.ssh-backup/irgendwas.txt")),
+            Decision::Allow
+        );
+    }
+
+    /// Ein `.ssh`-Unterordner außerhalb von `$HOME` (z.B. in einem
+    /// Projektverzeichnis) hat nichts mit den echten Zugangsdaten zu tun -
+    /// die alte reine Substring-Prüfung hätte hier fälschlich Ask ausgelöst.
+    #[test]
+    fn ssh_ordner_ausserhalb_von_home_loest_keine_rueckfrage_aus() {
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        assert_eq!(
+            manager.check_ask(Path::new("/tmp/projekt/.ssh/config")),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn normale_datei_loest_keine_rueckfrage_aus() {
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        assert_eq!(
+            manager.check_ask(Path::new("~/Dokumente/notizen.txt")),
+            Decision::Allow
+        );
     }
 }

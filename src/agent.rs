@@ -598,7 +598,9 @@ impl Agent {
                     if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json) {
                         if let Some(liste) = obj["erinnerungen"].as_array() {
                             for eintrag in liste {
-                                let art = eintrag["art"].as_str().unwrap_or(ART_FAKT);
+                                let art = crate::memory::normalisiere_art(
+                                eintrag["art"].as_str().unwrap_or(ART_FAKT),
+                            );
                                 let inhalt = eintrag["inhalt"].as_str().unwrap_or("");
                                 if g.merken_und_einbetten(art, inhalt, "notizbuch").await.unwrap_or(false) {
                                     self.ui.ereignis(AgentEvent::Gemmerkt {
@@ -623,7 +625,14 @@ impl Agent {
              Gib ein JSON-Objekt zurück:\n\
              {{\"erinnerungen\": [{{\"art\": \"praeferenz|fakt|lektion\", \"inhalt\": \"...\"}}]}}\n\
              Nur neue Erkenntnisse, die du noch nicht wusstest. Maximal 3. \
-             Nur antworten mit dem JSON."
+             WICHTIG bei \"praeferenz\": nur speichern, was Jens erkennbar als \
+             dauerhafte, wiederkehrende Regel gemeint hat. Eine Anweisung, die nur \
+             für DIESEN einen Auftrag galt (z.B. \"nur berichten, nichts ändern\" bei \
+             einem einzelnen Audit), ist keine Präferenz - so etwas als \
+             \"praeferenz\" zu speichern hat schon einmal dazu geführt, dass Famulus \
+             spätere, ausdrückliche Gegenteil-Aufträge ignoriert hat, weil die alte \
+             Präferenz jeden Prompt überschwemmte. Im Zweifel als \"lektion\" oder gar \
+             nicht speichern. Nur antworten mit dem JSON."
         );
 
         let nachrichten = vec![Message::User(prompt)];
@@ -634,7 +643,9 @@ impl Agent {
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json) {
                     if let Some(liste) = obj["erinnerungen"].as_array() {
                         for eintrag in liste {
-                            let art = eintrag["art"].as_str().unwrap_or(ART_FAKT);
+                            let art = crate::memory::normalisiere_art(
+                                eintrag["art"].as_str().unwrap_or(ART_FAKT),
+                            );
                             let inhalt = eintrag["inhalt"].as_str().unwrap_or("");
                             if g.merken_und_einbetten(art, inhalt, "rueckblick").await.unwrap_or(false) {
                                 self.ui.ereignis(AgentEvent::Gemmerkt {
