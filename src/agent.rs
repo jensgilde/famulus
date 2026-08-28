@@ -35,6 +35,7 @@ pub struct Agent {
     ui: Arc<dyn Ui>,
     gedaechtnis: Option<Arc<Gedaechtnis>>,
     max_turns: u32,
+    timeout_sekunden: u64,
     max_erinnerungen: usize,
     reflexion: bool,
     hat_vault: bool,
@@ -166,6 +167,7 @@ impl Agent {
             ui,
             gedaechtnis,
             max_turns: config.max_turns,
+            timeout_sekunden: config.timeout_sekunden,
             max_erinnerungen: config.max_erinnerungen,
             reflexion: config.reflexion,
             hat_vault,
@@ -398,12 +400,70 @@ impl Agent {
         // befolgt, eine Endlosschleife statt eines klaren Abbruchs.
         let mut wegen_ankuendigung_nachgehakt = false;
 
+        // ── Gesamt-Timeout des Auftrags ─────────────────────────────
+        // `timeout_sekunden` deckelt bisher nur einzelne Shell-Befehle und
+        // einzelne Modellanfragen - ein Deckel über den ganzen Auftrag
+        // fehlte, obwohl der Telegram-Bot während eines Auftrags seriell
+        // arbeitet (eine neue Nachricht wird erst nach diesem Auftrag
+        // gelesen). Konkret konnte ein Auftrag über max_turns=997 und
+        // langsame Modelle 30-60 Minuten stumm laufen.
+        //
+        // Bewusst KEIN tokio::time::timeout um die ganze Schleife: Das
+        // würde die Future am await-Punkt hart abbrechen und könnte einen
+        // laufenden `run_shell`-Kindprozess als Waise hinterlassen - genau
+        // das verhindert der Prozessgruppen-Kill in tools/shell.rs ja.
+        // Stattdessen prüft die Schleife selbst zwischen den Zügen, ob die
+        // Gesamtdauer überschritten ist; ein einzelner Zug (z.B. eine
+        // DVD-Konvertierung mit eigenem `timeout_seconds`-Parameter) darf
+        // die Grenze also einmal überschreiten, danach greift sie sofort.
+        let gesamt_start = std::time::Instant::now();
+        self.turn_schleife(
+            auftrag,
+            &mut nachrichten,
+            &tool_defs,
+            &mut zwischenfragen,
+            &system,
+            &provider,
+            &mut wegen_ankuendigung_nachgehakt,
+            gesamt_start,
+        )
+        .await
+    }
+    /// Ein kompletter Durchlauf der Turn-Schleife. In `run_task` liegt darum herum
+    /// das Gesamt-Timeout - die Schleife selbst entscheidet weiterhin über
+    /// Rückfragen, Werkzeug-Aufrufe, Zwischenantworten und die Reflexion.
+    async fn turn_schleife(
+        &self,
+        auftrag: &str,
+        nachrichten: &mut Vec<Message>,
+        tool_defs: &[ToolDefinition],
+        zwischenfragen: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
+        system: &Option<String>,
+        provider: &Arc<dyn LlmProvider>,
+        wegen_ankuendigung_nachgehakt: &mut bool,
+        gesamt_start: std::time::Instant,
+    ) -> anyhow::Result<()> {
+        // ── Gesamt-Timeout: nach jedem einzelnen Zug neu prüfen.
+        // Siehe run_task für die Begründung, warum bewusst kein
+        // hartes tokio-Timeout um die Schleife liegt.
+        let gesamt_limit = std::time::Duration::from_secs(self.timeout_sekunden);
+
         for turn in 0..self.max_turns {
+            if gesamt_start.elapsed() > gesamt_limit {
+                self.ui.ereignis(AgentEvent::Abgebrochen {
+                    fehler: format!(
+                        "Gesamt-Timeout: Auftrag nach {}s abgebrochen (Limit: {}s).",
+                        gesamt_start.elapsed().as_secs(),
+                        self.timeout_sekunden
+                    ),
+                });
+                return Ok(());
+            }
             // Jede Runde hängt Assistant- und ToolResults-Nachrichten an -
             // bei max_turns=997 reicht ein einmaliges Kürzen vor der
             // Schleife nicht, um das Provider-Kontextlimit über einen
             // langen Auftrag hinweg einzuhalten.
-            nachrichten_kuerzen(&mut nachrichten);
+            nachrichten_kuerzen(&mut *nachrichten);
 
             // Zwischenfragen einspeisen: kann eine laufende Modellanfrage
             // nicht unterbrechen (die ist schon unterwegs), deshalb hier -
@@ -519,13 +579,13 @@ impl Agent {
                     tool_calls: antwort.tool_calls,
                 });
                 nachrichten.push(Message::ToolResults(ergebnisse));
-            } else if !wegen_ankuendigung_nachgehakt && ist_ankuendigung_ohne_ausfuehrung(&antwort.text) {
+            } else if !*wegen_ankuendigung_nachgehakt && ist_ankuendigung_ohne_ausfuehrung(&antwort.text) {
                 // Text sagt "mache ich jetzt" oder "soll ich das umsetzen?",
                 // aber es kam kein Werkzeugaufruf - genau das Muster hinter
                 // "kündigt an, macht aber nichts". Statt das als fertig zu
                 // werten, einmal nachhaken und dem Modell die Chance geben,
                 // die Ankündigung im selben Auftrag tatsächlich einzulösen.
-                wegen_ankuendigung_nachgehakt = true;
+                *wegen_ankuendigung_nachgehakt = true;
                 nachrichten.push(Message::Assistant {
                     text: antwort.text,
                     tool_calls: Vec::new(),
@@ -558,13 +618,12 @@ impl Agent {
         // Max Turns erreicht.
         self.ui.ereignis(AgentEvent::Abgebrochen {
             fehler: format!(
-                "Maximale Anzahl von {} Schritten erreicht – Auftrag abgebrochen.",
+                "Maximum von {} Schritten erreicht – Auftrag abgebrochen.",
                 self.max_turns
             ),
         });
         Ok(())
     }
-
     /// Rückblick: nach jedem Auftrag Erkenntnisse ziehen und merken.
     async fn reflektieren(&self, auftrag: &str, zuege: u32) {
         let Some(g) = &self.gedaechtnis else {
@@ -664,11 +723,39 @@ impl Agent {
 /// Nach wie vielen fehlgeschlagenen Versuchen für denselben Zug aufgegeben wird.
 const MAX_VERSUCHE: u32 = 5;
 
-/// Wartezeit zwischen zwei Versuchen. Famulus' eigener Vorschlag (siehe
-/// Vault-Notiz „Telegram-Bot-Uebergabe.md"): server-seitige 500er sind meist
-/// nach ein, zwei Minuten wieder vorbei, kürzeres Warten trifft denselben
-/// überlasteten Dienst nur erneut.
-const WARTEZEIT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Wie lange vor dem nächsten Versuch gewartet wird, wenn der Fehler nach
+/// einem Timeout oder Verbindungsabbruch aussieht. Solche Fehler sind meist
+/// kurzlebig (der Dienst antwortet eine Sekunde später wieder), ein neuer
+/// Versuch ist fast kostenlos - da lohnt kein langes Warten.
+const WARTEZEIT_NETZWERK: u64 = 5;
+
+/// Ausgangswert des exponentiellen Backoffs für Serverfehler (5xx,
+/// Rate-Limit). Famulus' eigener Vorschlag (siehe Vault-Notiz
+/// „Telegram-Bot-Uebergabe.md") war, eine Minute zu warten - aber vier Mal
+/// 120 Sekunden (so der frühere Code) machen aus einem kurz gestörten
+/// Dienst einen Auftrag, der zehn Minuten stumm hängt. Besser: 10s, 20s,
+/// 40s, 60s - zusammen 130s statt 480s, und die ersten Versuche kommen
+/// deutlich schneller.
+const WARTEZEIT_BACKOFF_START: u64 = 10;
+const WARTEZEIT_BACKOFF_DECKEL: u64 = 60;
+
+/// Entscheidet anhand der Fehlerklasse, wie lange bis zum nächsten Versuch
+/// gewartet wird. Timeouts und Verbindungsfehler → kurz (5s), weil ein
+/// erneuter Versuch dort fast nichts kostet und die Störung meist schnell
+/// vorbei ist. Serverfehler → exponentiell mit Deckel. 402 (kein Guthaben)
+/// wird weiter oben schon abgefangen und gar nicht erst wiederholt.
+fn wartezeit_fuer(fehler: &anyhow::Error, versuch: u32) -> u64 {
+    let text = format!("{fehler:#}").to_lowercase();
+    let netzwerk = ["timeout", "timed out", "zeitüberschreitung", "connect", "connection"]
+        .iter()
+        .any(|m| text.contains(m));
+    if netzwerk {
+        WARTEZEIT_NETZWERK
+    } else {
+        let stufe = (versuch - 1).min(3);
+        (WARTEZEIT_BACKOFF_START << stufe).min(WARTEZEIT_BACKOFF_DECKEL)
+    }
+}
 
 /// Ruft `provider.next()` auf und wiederholt bei einem Fehler, statt den
 /// ganzen Auftrag abzubrechen - das war der eigentliche Bruch, nicht die
@@ -698,13 +785,14 @@ async fn rufe_mit_wiederaufsetzen(
                 if kein_guthaben || versuch >= MAX_VERSUCHE {
                     return Err(fehler);
                 }
+                let sekunden = wartezeit_fuer(&fehler, versuch);
                 ui.ereignis(AgentEvent::Warte {
                     grund: text,
-                    sekunden: WARTEZEIT.as_secs(),
+                    sekunden,
                     versuch,
                     max_versuche: MAX_VERSUCHE,
                 });
-                tokio::time::sleep(WARTEZEIT).await;
+                tokio::time::sleep(std::time::Duration::from_secs(sekunden)).await;
                 versuch += 1;
             }
         }
@@ -1043,5 +1131,29 @@ mod tests {
             assert_eq!(provider.aufrufe.load(Ordering::SeqCst), 1, "402 darf nicht wiederholt werden");
             assert_eq!(*ui.warte_ereignisse.lock().unwrap(), 0, "kein sinnloses Warten auf fehlendes Guthaben");
         }
+        #[test]
+        fn wartezeit_ist_bei_netzwerkfehler_kurz() {
+            let fehler = anyhow::anyhow!("timeout beim Abrufen");
+            assert_eq!(wartezeit_fuer(&fehler, 1), WARTEZEIT_NETZWERK);
+            assert_eq!(wartezeit_fuer(&fehler, 4), WARTEZEIT_NETZWERK);
+        }
+
+        #[test]
+        fn wartezeit_backoff_waechst_und_hat_deckel() {
+            let fehler = anyhow::anyhow!("500 Interner Serverfehler");
+            assert_eq!(wartezeit_fuer(&fehler, 1), 10);
+            assert_eq!(wartezeit_fuer(&fehler, 2), 20);
+            assert_eq!(wartezeit_fuer(&fehler, 3), 40);
+            // Ab Versuch 4+ gilt der Deckel (60 s statt 80 s).
+            assert_eq!(wartezeit_fuer(&fehler, 4), 60);
+            assert_eq!(wartezeit_fuer(&fehler, 5), 60);
+        }
+
+        #[test]
+        fn wartezeit_erkennt_verbindungsabbruch() {
+            let fehler = anyhow::anyhow!("connection closed before message completed");
+            assert_eq!(wartezeit_fuer(&fehler, 2), WARTEZEIT_NETZWERK);
+        }
+
     }
 }

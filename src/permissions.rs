@@ -77,6 +77,10 @@ impl PermissionManager {
         // Alles, was nicht ausdrücklich gesperrt ist, ist erlaubt.
         Decision::Allow
     }
+    /// Gesperrte Pfade, aufgelöst (für Shell-Prüfungen).
+    pub fn gesperrte_pfade(&self) -> &[PathBuf] {
+        &self.gesperrt
+    }
 }
 
 #[cfg(test)]

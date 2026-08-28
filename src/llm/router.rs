@@ -44,9 +44,9 @@ impl RouterProvider {
     /// eigentliche Modellantwort zu verwerfen - deshalb wird der Fehler
     /// hier verschluckt, nicht durchgereicht.
     #[cfg(not(test))]
-    fn protokollieren(provider: &str, erfolg: bool, dauer: std::time::Duration) {
+    fn protokollieren(provider: &str, erfolg: bool, dauer: std::time::Duration, fehler: Option<&str>) {
         if let Ok(g) = Gedaechtnis::standard() {
-            let _ = g.provider_aufruf_protokollieren(provider, erfolg, dauer.as_millis() as u64);
+            let _ = g.provider_aufruf_protokollieren(provider, erfolg, dauer.as_millis() as u64, fehler);
         }
     }
 
@@ -55,7 +55,12 @@ impl RouterProvider {
     /// ohne diesen Schalter würde jeder `cargo test`-Lauf die reale
     /// Datenbank mit Testdaten ("primaer"/"fallback") verschmutzen.
     #[cfg(test)]
-    fn protokollieren(_provider: &str, _erfolg: bool, _dauer: std::time::Duration) {}
+    fn protokollieren(
+        _provider: &str,
+        _erfolg: bool,
+        _dauer: std::time::Duration,
+        _fehler: Option<&str>,
+    ) {}
 }
 
 #[async_trait]
@@ -72,11 +77,16 @@ impl LlmProvider for RouterProvider {
             let start = Instant::now();
             match provider.next(system, messages, tools).await {
                 Ok(antwort) => {
-                    Self::protokollieren(provider.name(), true, start.elapsed());
+                    Self::protokollieren(provider.name(), true, start.elapsed(), None);
                     return Ok(antwort);
                 }
                 Err(fehler) => {
-                    Self::protokollieren(provider.name(), false, start.elapsed());
+                    Self::protokollieren(
+                        provider.name(),
+                        false,
+                        start.elapsed(),
+                        Some(&format!("{fehler:#}")),
+                    );
                     if index + 1 < self.providers.len() {
                         eprintln!(
                             "[router] {} fehlgeschlagen, versuche naechsten Provider: {fehler:#}",

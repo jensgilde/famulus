@@ -6,6 +6,16 @@
 //! wird pro Auftrag neu gebaut, der Gesprächsverlauf lebt hier im Prozess
 //! (pro Chat-ID) statt im Frontend.
 //!
+//! **Zwei Tasks seit v1.0.1:** Ein Dauer-Poll-Task ist der EINZIGE
+//! `getUpdates`-Aufrufer und sortiert die Updates (Allowlist). Der
+//! Hauptloop arbeitet seriell (ein Agent-Lauf pro Nachricht, wie die GUI ihn
+//! auch fährt). Während ein Auftrag läuft, hört der Hauptloop über einen
+//! dritten `select`-Zweig weiter auf eingehende Nachrichten und leitet sie
+//! als Zwischenfrage an den laufenden Agenten weiter statt sie stumm zu
+//! schlucken - vorher war der Bot während eines Auftrags komplett taub
+//! (Nachrichten wurden erst nach dem Auftrag als eigener Auftrag gelesen).
+//! `/status` antwortet auch während eines Laufs sofort, ohne LLM.
+//!
 //! **Sicherheit:** Famulus hat vollen, ungefragten Rechnerzugriff - siehe
 //! `permissions.rs`. Ein Bot-Token allein schützt nichts: Wer die Chat-ID
 //! kennt, kann mit dem Bot reden. Deshalb antwortet dieser Bot NUR auf Chats
@@ -19,7 +29,8 @@ use crate::ui::{AgentEvent, Ui};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 const API_BASE: &str = "https://api.telegram.org";
@@ -330,31 +341,216 @@ async fn status_text() -> String {
 /// begegnet ist) - deshalb hier `select!` auf das Task-Future selbst statt
 /// nur auf ein Abschluss-Ereignis zu warten. Wer nur auf `Fertig` wartet,
 /// hängt bei jedem Fehler, der vor dem ersten Ereignis auftritt, für immer.
-async fn bearbeite_nachricht(
-    client: &reqwest::Client,
-    token: &str,
+/// Vorsortiertes Update für den Hauptloop: Textnachricht oder aufgelöster
+/// Button-Klick, jeweils nur aus autorisierten Chats.
+struct Eingehend {
     chat_id: i64,
     text: String,
-    verlauf: &mut Vec<Message>,
-) {
-    // Schnellbefehl ohne LLM-Lauf (kostet nichts, antwortet sofort):
-    // /status zeigt Modell und Credits. Bewusst vor der ganzen
-    // Agent-Vorbereitung abgefangen, damit es auch dann funktioniert,
-    // wenn gerade kein Provider erreichbar ist.
-    if text.trim() == "/status" {
-        let _ = send_message(client, token, chat_id, &status_text().await).await;
-        return;
-    }
+}
 
-    // /reset löscht den Chatverlauf und sichert vorher das Wichtigste
-    // im Gedächtnis. Bewusst vor der Agent-Vorbereitung, damit der
-    // Prompt umgeschrieben werden kann, bevor der Verlauf gelöscht wird.
-    if text.trim() == "/reset" {
-        if verlauf.is_empty() {
-            let _ = send_message(client, token, chat_id, "Kein Chatverlauf zum Zurücksetzen.").await;
-            return;
+/// Sender für Zwischenfragen an den gerade laufenden Auftrag - das Gegenstück
+/// zu `ZWISCHENFRAGE_KANAL` aus ffi.rs, hier im Telegram-Prozess. Gesetzt,
+/// solange ein Auftrag läuft; der Hauptloop legt eingehende Nachrichten hier
+/// ab, damit der Agent sie sofort separat beantwortet (agent.rs,
+/// „Zwischenfragen einspeisen“).
+static ZWISCHENFRAGE_TELEGRAM: LazyLock<Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// 1, solange der Hauptloop in einem Agent-Lauf steckt. Darüber entscheidet
+/// der Hauptloop, ob eine eingehende Nachricht als Zwischenfrage in den
+/// laufenden Auftrag geht (1) oder als eigener Auftrag behandelt wird (0).
+static AUFTRAG_AKTIV: AtomicBool = AtomicBool::new(false);
+
+pub async fn run(cfg: TelegramConfig) -> Result<()> {
+    let client = reqwest::Client::new();
+    let username = get_me(&client, &cfg.token).await?;
+    println!(
+        "[telegram] Verbunden als @{username}, erlaubte Chats: {:?}",
+        cfg.allowed_chat_ids
+    );
+
+    // Verlauf pro Chat, nur im Prozessspeicher - überlebt einen Neustart
+    // absichtlich nicht, genau wie die GUI ihn nicht in eine Datei schreibt.
+    let verlaeufe: Arc<Mutex<HashMap<i64, Vec<Message>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    // Der Poll-Task ist der EINZIGE getUpdates-Aufrufer und läuft dauerhaft.
+    // Eingehende Nachrichten gehen in einen unbegrenzten Kanal; solange der
+    // Hauptloop beschäftigt ist, puffern sie dort (bzw. werden während eines
+    // Agent-Laufs sofort als Zwischenfrage weitergeleitet, siehe unten).
+    // Wichtig: Weil es genau einen getUpdates-Aufrufer gibt, kann es keine
+    // offset-Konflikte geben - ein zweiter Poll während eines Agent-Laufs
+    // wäre genau der Fehler des alten seriellen Designs gewesen.
+    let (eingehend_tx, mut eingehend_rx) =
+        tokio::sync::mpsc::unbounded_channel::<Eingehend>();
+
+    let poll_client = client.clone();
+    let poll_token = cfg.token.clone();
+    let poll_chats = cfg.allowed_chat_ids.clone();
+
+    let _poll_task = tokio::spawn(async move {
+        let mut offset: i64 = 0;
+        loop {
+            let updates = match get_updates(&poll_client, &poll_token, offset).await {
+                Ok(u) => u,
+                Err(e) => {
+                    eprintln!("[telegram] getUpdates fehlgeschlagen: {e:#} - warte 5s");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            if updates.is_empty() {
+                // Telegram long-poll: Leere Antwort = nichts Neues. Kurz
+                // schlafen, damit der Loop nicht heiß läuft.
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                continue;
+            }
+
+            for update in updates {
+                offset = offset.max(update.update_id + 1);
+
+                if let Some(cb) = update.callback_query {
+                    beantworte_callback(&poll_client, &poll_token, &cb.id).await;
+                    let Some(msg) = cb.message else { continue };
+                    let chat_id = msg.chat.id;
+                    if !poll_chats.contains(&chat_id) {
+                        continue;
+                    }
+                    let gewaehlt = cb
+                        .data
+                        .as_deref()
+                        .and_then(|d| d.parse::<usize>().ok())
+                        .and_then(|i| msg.reply_markup.as_ref().map(|m| (i, m)))
+                        .and_then(|(i, markup)| markup.inline_keyboard.get(i))
+                        .and_then(|zeile| zeile.first())
+                        .map(|knopf| knopf.text.clone());
+                    let Some(text) = gewaehlt else {
+                        eprintln!("[telegram] Button-Klick ohne auflösbare Option (chat_id={chat_id})");
+                        continue;
+                    };
+                    entferne_buttons(&poll_client, &poll_token, chat_id, msg.message_id).await;
+                    println!("[telegram] Button-Antwort von chat_id={chat_id}: {text}");
+                    let _ = eingehend_tx.send(Eingehend { chat_id, text });
+                    continue;
+                }
+
+                let Some(msg) = update.message else { continue };
+                let Some(text) = msg.text else { continue };
+                let chat_id = msg.chat.id;
+                if !poll_chats.contains(&chat_id) {
+                    let wer = msg
+                        .from
+                        .and_then(|f| f.username)
+                        .unwrap_or_else(|| "unbekannt".to_string());
+                    eprintln!(
+                        "[telegram] Abgewiesen: chat_id={chat_id} (@{wer}) ist nicht auf der Allowlist"
+                    );
+                    let _ = send_message(&poll_client, &poll_token, chat_id, "Nicht autorisiert.").await;
+                    continue;
+                }
+                println!("[telegram] Nachricht von chat_id={chat_id}: {text}");
+                let _ = eingehend_tx.send(Eingehend { chat_id, text });
+            }
         }
-        let _ = send_message(client, token, chat_id, "🧠 Ich sichere kurz das Wichtigste aus unserem Chat, dann räume ich auf …").await;
+    });
+
+    // Hauptloop: verarbeitet die eingehenden Nachrichten seriell.
+    while let Some(eingehend) = eingehend_rx.recv().await {
+        let chat_id = eingehend.chat_id;
+
+        // ── Schnellbefehl /status: kostet nichts, antwortet sofort ──
+        if eingehend.text.trim() == "/status" {
+            let _ = send_message(&client, &cfg.token, chat_id, &status_text().await).await;
+            continue;
+        }
+
+        let mut verlauf_guard = verlaeufe.lock().unwrap_or_else(|e| e.into_inner());
+        let verlauf_vec: &mut Vec<Message> =
+            verlauf_guard.entry(chat_id).or_default();
+
+        // ── /reset: Verlauf sichern und löschen (eigener Code, kein Agent) ──
+        if eingehend.text.trim() == "/reset" {
+            if verlauf_vec.is_empty() {
+                let _ = send_message(&client, &cfg.token, chat_id, "Kein Chatverlauf zum Zurücksetzen.").await;
+                continue;
+            }
+            let _ = send_message(&client, &cfg.token, chat_id, "🧠 Ich sichere kurz das Wichtigste aus unserem Chat, dann räume ich auf …").await;
+            let vorbereitung = (|| -> Result<(Config, Box<dyn llm::LlmProvider>)> {
+                let config = Config::load()?;
+                let provider = llm::build_provider(&config)?;
+                Ok((config, provider))
+            })();
+            let (config, provider) = match vorbereitung {
+                Ok(x) => x,
+                Err(e) => {
+                    let _ = send_message(&client, &cfg.token, chat_id, &format!("✗ Kann /reset nicht ausführen: {e:#}")).await;
+                    continue;
+                }
+            };
+            let (tx, mut reset_rx) = tokio::sync::mpsc::unbounded_channel();
+            let ui: Arc<dyn Ui> = Arc::new(TelegramUi { tx });
+            let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
+            let (_zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
+            let vorherige = verlauf_vec.clone();
+            let n = vorherige.len();
+            let reset_prompt = format!(
+                "Der Chatverlauf ({n} Nachrichten) wird gleich gelöscht.              Fasse zuerst das Wichtigste zusammen, das ich mir merken sollte:              Fakten über Jens, seine Präferenzen, laufende Projekte, offene              Aufgaben und Lektionen. Nutze das notizbuch-Tool, um die wichtigsten              Erkenntnisse (maximal 10) zu speichern. Gib dann eine kurze              Zusammenfassung, was du gespeichert hast."
+            );
+            let lauf = agent.run_task(&vorherige, &reset_prompt, zf_rx);
+            tokio::pin!(lauf);
+            let mut assembled = String::new();
+            let mut abbruch: Option<String> = None;
+            let lauf_ergebnis = loop {
+                tokio::select! {
+                    biased;
+                    ergebnis = &mut lauf => break ergebnis,
+                    ereignis = reset_rx.recv() => {
+                        match ereignis {
+                            Some(AgentEvent::Text { chunk }) => assembled.push_str(&chunk),
+                            Some(AgentEvent::Abgebrochen { fehler }) => abbruch = Some(fehler),
+                            Some(_) => {}
+                            None => {}
+                        }
+                    }
+                }
+            };
+            let mut antwort = assembled;
+            if let Some(f) = abbruch {
+                if !antwort.is_empty() { antwort.push_str("
+
+"); }
+                antwort.push_str(&format!("✗ {f}"));
+            }
+            if let Err(e) = lauf_ergebnis {
+                if !antwort.is_empty() { antwort.push_str("
+
+"); }
+                antwort.push_str(&format!("✗ {e:#}"));
+            }
+            verlauf_vec.clear();
+            let bestaetigung = format!("✅ Chatverlauf gelöscht.
+
+{}", antwort);
+            let _ = send_message(&client, &cfg.token, chat_id, &bestaetigung).await;
+            continue;
+        }
+
+        // ── Sofort antworten statt einreihen: Nachricht, die während eines
+        // laufenden Auftrags reinkommt, wird NICHT als eigener Auftrag
+        // behandelt (das öffnete einen zweiten parallelen Agent-Lauf mit
+        // demselben Verlauf), sondern als Zwischenfrage in den laufenden
+        // Auftrag eingespeist. Siehe agent.rs.
+        if AUFTRAG_AKTIV.load(Ordering::SeqCst) {
+            if let Some(tx) = ZWISCHENFRAGE_TELEGRAM
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
+                let _ = tx.send(eingehend.text);
+            }
+            continue;
+        }
 
         let vorbereitung = (|| -> Result<(Config, Box<dyn llm::LlmProvider>)> {
             let config = Config::load()?;
@@ -365,8 +561,8 @@ async fn bearbeite_nachricht(
         let (config, provider) = match vorbereitung {
             Ok(x) => x,
             Err(e) => {
-                let _ = send_message(client, token, chat_id, &format!("✗ Kann /reset nicht ausführen: {e:#}")).await;
-                return;
+                let _ = send_message(&client, &cfg.token, chat_id, &format!("✗ Konnte nicht starten: {e:#}")).await;
+                continue;
             }
         };
 
@@ -374,15 +570,14 @@ async fn bearbeite_nachricht(
         let ui: Arc<dyn Ui> = Arc::new(TelegramUi { tx });
         let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
 
-        let (_zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
+        let text = eingehend.text.clone();
+        let vorherige = verlauf_vec.clone();
+        let (zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
+        *ZWISCHENFRAGE_TELEGRAM.lock().unwrap_or_else(|e| e.into_inner()) = Some(zf_tx);
 
-        let vorherige = verlauf.clone();
-        let n = vorherige.len();
-        let reset_prompt = format!(
-            "Der Chatverlauf ({n} Nachrichten) wird gleich gelöscht.              Fasse zuerst das Wichtigste zusammen, das ich mir merken sollte:              Fakten über Jens, seine Präferenzen, laufende Projekte, offene              Aufgaben und Lektionen. Nutze das notizbuch-Tool, um die wichtigsten              Erkenntnisse (maximal 10) zu speichern. Gib dann eine kurze              Zusammenfassung, was du gespeichert hast."
-        );
+        AUFTRAG_AKTIV.store(true, Ordering::SeqCst);
 
-        let lauf = agent.run_task(&vorherige, &reset_prompt, zf_rx);
+        let lauf = agent.run_task(&vorherige, &text, zf_rx);
         tokio::pin!(lauf);
 
         let mut assembled = String::new();
@@ -390,216 +585,87 @@ async fn bearbeite_nachricht(
 
         let lauf_ergebnis = loop {
             tokio::select! {
+                biased;
+                // `lauf` zuerst: Ist er fertig, gewinnt er - so wird eine
+                // Nachricht, die im selben Moment eintrifft, nicht noch als
+                // Zwischenfrage an einen schon beendeten Agenten geschickt
+                // (die wäre verloren), sondern nach dem Auftrag normal
+                // verarbeitet.
+                ergebnis = &mut lauf => break ergebnis,
                 ereignis = rx.recv() => {
                     match ereignis {
                         Some(AgentEvent::Text { chunk }) => assembled.push_str(&chunk),
-                        Some(AgentEvent::ToolStart { .. }) => {} // Werkzeuge still
+                        Some(AgentEvent::ToolStart { name, args }) => {
+                            let vorschau: String = args.to_string().chars().take(200).collect();
+                            let _ = send_message(&client, &cfg.token, chat_id, &format!("⚙ {name}({vorschau})")).await;
+                        }
                         Some(AgentEvent::Abgebrochen { fehler }) => abbruch = Some(fehler),
+                        Some(AgentEvent::ZwischenfrageAntwort { frage, text }) => {
+                            let _ = send_message(&client, &cfg.token, chat_id, &format!("↩ Zu \"{frage}\": {text}")).await;
+                        }
                         Some(AgentEvent::Warte { grund, sekunden, versuch, max_versuche }) => {
                             let grund: String = grund.chars().take(300).collect();
-                            let _ = send_message(
-                                client, token, chat_id,
-                                &format!("⏳ Fehlgeschlagen ({versuch}/{max_versuche}), versuche in {sekunden}s erneut: {grund}"),
-                            ).await;
+                            let _ = send_message(&client, &cfg.token, chat_id, &format!("⏳ Fehlgeschlagen ({versuch}/{max_versuche}), versuche in {sekunden}s erneut: {grund}")).await;
+                        }
+                        Some(AgentEvent::FrageAnNutzer { frage, optionen }) => {
+                            if let Err(e) = send_message_mit_optionen(&client, &cfg.token, chat_id, &frage, &optionen).await {
+                                eprintln!("[telegram] Rückfrage senden fehlgeschlagen: {e:#}");
+                            }
                         }
                         Some(_) => {}
                         None => {}
                     }
                 }
-                ergebnis = &mut lauf => break ergebnis,
+                // Während der Agent läuft, eingehende Nachrichten als
+                // Zwischenfragen weiterreichen - das war die Kern-Stille:
+                // alte Version las erst nach dem Auftrag wieder.
+                nachricht = eingehend_rx.recv() => {
+                    match nachricht {
+                        Some(n) => {
+                            if n.text.trim() == "/status" {
+                                let _ = send_message(&client, &cfg.token, n.chat_id, &status_text().await).await;
+                                continue;
+                            }
+                            if let Some(tx) = ZWISCHENFRAGE_TELEGRAM
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .as_ref()
+                            {
+                                let _ = tx.send(n.text);
+                            }
+                        }
+                        None => {}
+                    }
+                }
             }
         };
+
+        AUFTRAG_AKTIV.store(false, Ordering::SeqCst);
+        *ZWISCHENFRAGE_TELEGRAM.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
         let mut antwort = assembled;
         if let Some(f) = abbruch {
-            if !antwort.is_empty() { antwort.push_str("\n\n"); }
+            if !antwort.is_empty() { antwort.push_str("
+
+"); }
             antwort.push_str(&format!("✗ {f}"));
         }
         if let Err(e) = lauf_ergebnis {
-            if !antwort.is_empty() { antwort.push_str("\n\n"); }
+            if !antwort.is_empty() { antwort.push_str("
+
+"); }
             antwort.push_str(&format!("✗ {e:#}"));
         }
 
-        verlauf.clear();
-        let bestaetigung = format!("✅ Chatverlauf gelöscht.\n\n{}", antwort);
-        let _ = send_message(client, token, chat_id, &bestaetigung).await;
-        return;
-    }
-
-    let vorbereitung = (|| -> Result<(Config, Box<dyn llm::LlmProvider>)> {
-        let config = Config::load()?;
-        let provider = llm::build_provider(&config)?;
-        Ok((config, provider))
-    })();
-
-    let (config, provider) = match vorbereitung {
-        Ok(x) => x,
-        Err(e) => {
-            let _ = send_message(client, token, chat_id, &format!("✗ Konnte nicht starten: {e:#}")).await;
-            return;
+        if let Err(e) = send_message(&client, &cfg.token, chat_id, &antwort).await {
+            eprintln!("[telegram] Antwort senden fehlgeschlagen: {e:#}");
         }
-    };
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let ui: Arc<dyn Ui> = Arc::new(TelegramUi { tx });
-    let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
-
-    // Keine Zwischenfragen-Unterstützung in v1: eine zweite Telegram-
-    // Nachricht, während der Agent noch läuft, wartet einfach auf den
-    // nächsten Poll-Durchlauf und wird als eigener Auftrag behandelt -
-    // genau wie main.rs es für die CLI schon macht.
-    let (_zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
-
-    let vorherige = verlauf.clone();
-    let lauf = agent.run_task(&vorherige, &text, zf_rx);
-    tokio::pin!(lauf);
-
-    let mut assembled = String::new();
-    let mut abbruch: Option<String> = None;
-
-    let lauf_ergebnis = loop {
-        tokio::select! {
-            ereignis = rx.recv() => {
-                match ereignis {
-                    Some(AgentEvent::Text { chunk }) => assembled.push_str(&chunk),
-                    Some(AgentEvent::ToolStart { name, args }) => {
-                        let vorschau: String = args.to_string().chars().take(200).collect();
-                        let _ = send_message(client, token, chat_id, &format!("⚙ {name}({vorschau})")).await;
-                    }
-                    Some(AgentEvent::Abgebrochen { fehler }) => abbruch = Some(fehler),
-                    Some(AgentEvent::ZwischenfrageAntwort { frage, text }) => {
-                        let _ = send_message(client, token, chat_id, &format!("↩ Zu \"{frage}\": {text}")).await;
-                    }
-                    Some(AgentEvent::Warte { grund, sekunden, versuch, max_versuche }) => {
-                        let grund: String = grund.chars().take(300).collect();
-                        let _ = send_message(
-                            client,
-                            token,
-                            chat_id,
-                            &format!("⏳ Fehlgeschlagen ({versuch}/{max_versuche}), versuche in {sekunden}s erneut: {grund}"),
-                        )
-                        .await;
-                    }
-                    Some(AgentEvent::FrageAnNutzer { frage, optionen }) => {
-                        if let Err(e) = send_message_mit_optionen(client, token, chat_id, &frage, &optionen).await {
-                            eprintln!("[telegram] Rückfrage senden fehlgeschlagen: {e:#}");
-                        }
-                    }
-                    Some(_) => {}
-                    None => {}
-                }
-            }
-            ergebnis = &mut lauf => break ergebnis,
-        }
-    };
-
-    let mut antwort = assembled;
-    if let Some(f) = abbruch {
-        if !antwort.is_empty() {
-            antwort.push_str("
-
-");
-        }
-        antwort.push_str(&format!("✗ {f}"));
+        verlauf_vec.push(Message::User(text.clone()));
+        verlauf_vec.push(Message::Assistant {
+            text: antwort,
+            tool_calls: Vec::new(),
+        });
     }
-    if let Err(e) = lauf_ergebnis {
-        if !antwort.is_empty() {
-            antwort.push_str("
-
-");
-        }
-        antwort.push_str(&format!("✗ {e:#}"));
-    }
-
-    if let Err(e) = send_message(client, token, chat_id, &antwort).await {
-        eprintln!("[telegram] Antwort senden fehlgeschlagen: {e:#}");
-    }
-
-    verlauf.push(Message::User(text.clone()));
-    verlauf.push(Message::Assistant {
-        text: antwort,
-        tool_calls: Vec::new(),
-    });
-}
-
-pub async fn run(cfg: TelegramConfig) -> Result<()> {
-    let client = reqwest::Client::new();
-    let username = get_me(&client, &cfg.token).await?;
-    println!(
-        "[telegram] Verbunden als @{username}, erlaubte Chats: {:?}",
-        cfg.allowed_chat_ids
-    );
-
-    let mut offset: i64 = 0;
-    // Verlauf pro Chat, nur im Prozessspeicher - überlebt einen Neustart
-    // absichtlich nicht, genau wie die GUI ihn nicht in eine Datei schreibt.
-    let mut verlaeufe: HashMap<i64, Vec<Message>> = HashMap::new();
-
-    loop {
-        let updates = match get_updates(&client, &cfg.token, offset).await {
-            Ok(u) => u,
-            Err(e) => {
-                eprintln!("[telegram] getUpdates fehlgeschlagen: {e:#} - warte 5s");
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-        };
-
-        for update in updates {
-            offset = offset.max(update.update_id + 1);
-
-            // Button-Klick auf eine `frage_nutzer`-Frage: die Antwort setzt
-            // den Auftrag genau wie eine getippte Nachricht fort, siehe
-            // tools/frage_nutzer.rs für die Begründung des Designs.
-            if let Some(cb) = update.callback_query {
-                beantworte_callback(&client, &cfg.token, &cb.id).await;
-
-                let Some(msg) = &cb.message else { continue };
-                let chat_id = msg.chat.id;
-                if !cfg.allowed_chat_ids.contains(&chat_id) {
-                    continue;
-                }
-                let gewaehlt = cb
-                    .data
-                    .as_deref()
-                    .and_then(|d| d.parse::<usize>().ok())
-                    .and_then(|i| msg.reply_markup.as_ref().map(|m| (i, m)))
-                    .and_then(|(i, markup)| markup.inline_keyboard.get(i))
-                    .and_then(|zeile| zeile.first())
-                    .map(|knopf| knopf.text.clone());
-
-                let Some(text) = gewaehlt else {
-                    eprintln!("[telegram] Button-Klick ohne auflösbare Option (chat_id={chat_id})");
-                    continue;
-                };
-
-                entferne_buttons(&client, &cfg.token, chat_id, msg.message_id).await;
-
-                println!("[telegram] Button-Antwort von chat_id={chat_id}: {text}");
-                let verlauf = verlaeufe.entry(chat_id).or_default();
-                bearbeite_nachricht(&client, &cfg.token, chat_id, text, verlauf).await;
-                continue;
-            }
-
-            let Some(msg) = update.message else { continue };
-            let Some(text) = msg.text else { continue };
-            let chat_id = msg.chat.id;
-
-            if !cfg.allowed_chat_ids.contains(&chat_id) {
-                let wer = msg
-                    .from
-                    .and_then(|f| f.username)
-                    .unwrap_or_else(|| "unbekannt".to_string());
-                eprintln!(
-                    "[telegram] Abgewiesen: chat_id={chat_id} (@{wer}) ist nicht auf der Allowlist"
-                );
-                let _ = send_message(&client, &cfg.token, chat_id, "Nicht autorisiert.").await;
-                continue;
-            }
-
-            println!("[telegram] Nachricht von chat_id={chat_id}: {text}");
-            let verlauf = verlaeufe.entry(chat_id).or_default();
-            bearbeite_nachricht(&client, &cfg.token, chat_id, text, verlauf).await;
-        }
-    }
+    Ok(())
 }

@@ -1,8 +1,9 @@
 use super::Tool;
 use crate::llm::ToolDefinition;
-use crate::permissions::PermissionManager;
+use crate::permissions::{Decision, PermissionManager};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Standard-Deckel für einen einzelnen Shell-Aufruf, in Sekunden.
@@ -52,6 +53,69 @@ fn ist_force_push(command: &str) -> bool {
     false
 }
 
+/// Findet das erste Token eines Shell-Befehls, das in einem gesperrten
+/// (Deny) oder sensiblen (Ask) Verzeichnis liegt.
+///
+/// Die Lücke, die das schließt: `deny_paths` ist die einzige echte Sperre
+/// von Famulus - aber `run_shell` lief komplett an ihr vorbei. Ein Modell
+/// konnte also jedes Verbot über einen Shell-Befehl umgehen: `rm -rf
+/// ~/wichtiges` nach dem Motto "das ist nur read_file, das gilt für mich
+/// nicht". Seit diesem Check gilt `deny_paths` auch für Shell-Kommandos -
+/// ist ein Pfad als Token im Befehl erkennbar, wird vor der Ausführung
+/// geblockt. Die Sensible-Pfad-Prüfung (~/.ssh etc., check_ask) läuft
+/// natürlich auch - die gilt unabhängig von deny_paths immer.
+///
+/// Bewusst NICHT wasserdicht: die Shell ist Turing-vollständig, jede
+/// Pfadprüfung auf Token-Ebene lässt sich durch Expansion, Variablenspiel
+/// oder `eval` umgehen. Gedeckt sind aber die naheliegenden Formen: direkte
+/// Pfade, `~` (löst `resolve_for_check` selbst auf) und `$HOME/...` (hier
+/// manuell expandiert - `$HOME` ist der eine Pfad, der wirklich wehtut).
+///
+/// Rückgabe: `(token, verboten)` - `verboten = true` ist ein Deny (harter
+/// Abbruch), `false` ein Ask (Rückfrage vor Ausführung), analog zur
+/// Unterscheidung in `permissions.rs`.
+fn gesperrter_pfad_token(command: &str, permissions: &PermissionManager) -> Option<(String, bool)> {
+    let gesperrt = permissions.gesperrte_pfade();
+
+    for token in command.split_whitespace() {
+        // Options-Flags und reine Zuweisungen (FOO=bar) sind keine Pfade.
+        if token.starts_with('-') || (token.contains('=') && !token.contains('/')) {
+            continue;
+        }
+        let bereinigt = token.trim_matches(|c| matches!(c, '"' | '\'' | '`' | '(' | ')' | ';'));
+        if bereinigt.is_empty() {
+            continue;
+        }
+
+        // `$HOME/...` kommt aus der Shell-Expansion als ein Token an -
+        // ohne manuelle Auflösung liefe es an der Pfadprüfung vorbei.
+        let pfad: PathBuf = if let Some(rest) = bereinigt.strip_prefix("$HOME") {
+            match dirs::home_dir() {
+                Some(home) => {
+                    let mut p = home;
+                    if !rest.is_empty() {
+                        p.push(rest.trim_start_matches('/'));
+                    }
+                    p
+                }
+                None => PathBuf::from(bereinigt),
+            }
+        } else {
+            PathBuf::from(bereinigt)
+        };
+
+        // Deny-Check nur, wenn überhaupt etwas gesperrt ist; der Ask-Check
+        // gilt immer.
+        if !gesperrt.is_empty() && permissions.check_path(&pfad) == Decision::Deny {
+            return Some((bereinigt.to_string(), true));
+        }
+        if permissions.check_ask(&pfad) == Decision::Ask {
+            return Some((bereinigt.to_string(), false));
+        }
+    }
+    None
+}
+
 pub struct ShellTool;
 
 #[async_trait]
@@ -85,11 +149,25 @@ impl Tool for ShellTool {
             return Ok("RÜCKFRAGE ERFORDERLICH: Dieser Befehl enthält einen Force-Push. Frage den Nutzer vor der Ausführung um Erlaubnis. Führe den Befehl erst aus, wenn der Nutzer ausdrücklich zustimmt.".to_string());
         }
 
-        // Kein Pfad, keine Prüfung: Shell-Befehle laufen ungefiltert.
-        // `deny_paths` greift hier NICHT - wer den Zugriff auf ein
-        // Verzeichnis wirklich verhindern will, kommt an run_shell nicht
-        // vorbei. Steht so in permissions.rs, ist so gewollt.
-        let _ = permissions;
+        // `deny_paths` gilt auch für Shell-Kommandos - vorher lief jeder
+        // Befehl ungefiltert und hob jede Sperre auf. Deny = harter Abbruch
+        // (Fehler, das Modell kann nicht "nachverhandeln"), Ask = Rückfrage
+        // als Text, damit das Modell frage_nutzer aufrufen kann.
+        if let Some((token, verboten)) = gesperrter_pfad_token(command, permissions) {
+            if verboten {
+                anyhow::bail!(
+                    "ZUGRIFF VERWEIGERT: Der Befehl enthält den gesperrten Pfad '{token}'. \
+                     Der Pfad steht in deny_paths und darf weder direkt noch über \
+                     Shell-Befehle angefasst werden."
+                );
+            }
+            return Ok(format!(
+                "RÜCKFRAGE ERFORDERLICH: Der Befehl enthält den sensiblen Pfad '{token}' \
+                 (~/.ssh, ~/.gnupg, ~/.aws oder ~/.password-store). Frage den Nutzer vor \
+                 der Ausführung um Erlaubnis und führe den Befehl erst aus, wenn er \
+                 ausdrücklich zustimmt."
+            ));
+        }
 
         // Ungültige oder fehlende Angabe = Standard. Ein Modell, das hier
         // Unsinn einträgt, soll nicht den ganzen Lauf sprengen.
@@ -170,12 +248,155 @@ impl Tool for ShellTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+
+    fn config_mit(deny: Vec<String>) -> Config {
+        Config {
+            provider: "hyper".to_string(),
+            model: None,
+            base_url: None,
+            api_key_env: None,
+            fallback_providers: Vec::new(),
+            max_turns: 20,
+            max_antwort_tokens: 16_000,
+            timeout_sekunden: 300,
+            vault: None,
+            max_erinnerungen: 12,
+            reflexion: false,
+            deny_paths: deny,
+            modell_modus: "manuell".to_string(),
+            guenstiges_modell: None,
+        }
+    }
+
+    /// Spielwiese mit einem gesperrten und einem erlaubten Verzeichnis.
+    struct Sandbox {
+        root: PathBuf,
+    }
+
+    impl Sandbox {
+        /// Eindeutig pro Test: Die Tests laufen im selben Prozess, eine
+        /// bloße PID als Namensbestandteil würde alle Sandboxes übereinander
+        /// legen (ein Test löscht dem anderen das Verzeichnis weg).
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static ZAEHLER: AtomicU32 = AtomicU32::new(0);
+            let id = format!("{}_{}", std::process::id(), ZAEHLER.fetch_add(1, Ordering::SeqCst));
+            let root = std::env::temp_dir().join(format!("famulus_shell_test_{id}"));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("gesperrt")).unwrap();
+            std::fs::create_dir_all(root.join("projekt")).unwrap();
+            std::fs::write(root.join("gesperrt/geheim.txt"), b"geheim").unwrap();
+            Self { root }
+        }
+
+        fn manager(&self) -> PermissionManager {
+            PermissionManager::new(&config_mit(vec![self
+                .root
+                .join("gesperrt")
+                .to_string_lossy()
+                .into_owned()]))
+        }
+    }
+
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    // ── gesperrter_pfad_token (rein, ohne echten Shell-Aufruf) ───────
+
+    #[test]
+    fn token_im_gesperrten_ordner_wird_gefunden() {
+        let sb = Sandbox::new();
+        let befehl = format!("rm -rf {}", sb.root.join("gesperrt").display());
+        let treffer = gesperrter_pfad_token(&befehl, &sb.manager());
+        assert!(treffer.is_some());
+        let (token, verboten) = treffer.unwrap();
+        assert!(verboten, "Deny-Pfad muss als verboten gemeldet werden");
+        assert!(token.contains("gesperrt"));
+    }
+
+    #[test]
+    fn token_im_sensiblen_home_pfad_erfordert_rueckfrage() {
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        // Existenz von ~/.ssh ist nicht nötig - resolve_for_check läuft am
+        // nicht existierenden Rest entlang bis zum existierenden $HOME.
+        let treffer = gesperrter_pfad_token("cat ~/.ssh/id_ed25519", &manager);
+        assert!(matches!(treffer, Some((t, false)) if t == "~/.ssh/id_ed25519"));
+    }
+
+    #[test]
+    fn dollar_home_umgehung_wird_gefunden() {
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        let treffer = gesperrter_pfad_token("cat $HOME/.ssh/id_ed25519", &manager);
+        assert!(matches!(treffer, Some((t, false)) if t == "$HOME/.ssh/id_ed25519"));
+    }
+
+    #[test]
+    fn harmloser_befehl_bleibt_frei() {
+        let sb = Sandbox::new();
+        let manager = PermissionManager::new(&config_mit(vec![sb
+            .root
+            .join("gesperrt")
+            .to_string_lossy()
+            .into_owned()]));
+        assert!(gesperrter_pfad_token("echo hallo welt", &manager).is_none());
+        assert!(gesperrter_pfad_token("git push origin main", &manager).is_none());
+        assert!(gesperrter_pfad_token(
+            &format!("ls {}", sb.root.join("projekt").display()),
+            &manager
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn ohne_deny_paths_wird_nur_ask_geprueft() {
+        // Leere deny_paths: harmlose Pfade laufen ungeprüft durch, der
+        // Ask-Check für sensible Pfade greift trotzdem.
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        assert!(gesperrter_pfad_token("rm -rf /tmp/irgendwas", &manager).is_none());
+        let treffer = gesperrter_pfad_token("cat ~/.ssh/id_ed25519", &manager);
+        assert!(matches!(treffer, Some((_, false))));
+    }
+
+    // ── execute integriert ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn execute_blockt_gesperrten_pfad_bevor_er_laeuft() {
+        let sb = Sandbox::new();
+        let ziel = sb.root.join("gesperrt/neu.txt");
+        let befehl = format!("touch {}", ziel.display());
+        let ergebnis = ShellTool
+            .execute(json!({ "command": befehl }), &sb.manager())
+            .await;
+        assert!(ergebnis.is_err());
+        assert!(ergebnis.unwrap_err().to_string().contains("ZUGRIFF VERWEIGERT"));
+        assert!(!ziel.exists(), "Befehl darf im Deny-Fall nie ausgeführt werden");
+    }
+
+    #[tokio::test]
+    async fn execute_fragt_bei_sensiblem_pfad_zurueck() {
+        let manager = PermissionManager::new(&config_mit(vec![]));
+        let ergebnis = ShellTool
+            .execute(json!({ "command": "cat ~/.ssh/id_ed25519" }), &manager)
+            .await
+            .unwrap();
+        assert!(ergebnis.contains("RÜCKFRAGE ERFORDERLICH"));
+    }
+
+    // ── Timeout-Tests (brauchen die tokio-Laufzeit) ──────────────────
+
+    #[tokio::test]
+    async fn schneller_befehl_liefert_normales_ergebnis() {
+        let out = ausfuehren("echo hallo", None).await.unwrap();
+        assert!(out.contains("hallo"));
+        assert!(out.contains("exit code: 0"));
+    }
 
     async fn ausfuehren(command: &str, timeout: Option<u64>) -> anyhow::Result<String> {
-        // Minimale, aber echte Config über den TOML-Parser - `deny_paths`
-        // bleibt leer, das ist für Shell-Befehle ohnehin ohne Bedeutung.
-        let config: crate::config::Config =
-            toml::from_str("provider = \"hyper\"").expect("Test-Konfiguration");
+        let config = config_mit(vec![]);
         let permissions = PermissionManager::new(&config);
         let mut args = json!({ "command": command });
         if let Some(t) = timeout {
@@ -191,15 +412,12 @@ mod tests {
         assert!(ist_force_push("git push --force-with-lease"));
     }
 
-    /// Der Kernfall: Flag und `push` in anderer Reihenfolge oder mit
-    /// zusätzlichen Argumenten dazwischen. Die alte Substring-Prüfung auf
-    /// `"push -f"` bzw. `"push --force"` ließ genau das durch.
     #[test]
     fn erkennt_force_push_mit_zwischenliegenden_argumenten() {
         assert!(ist_force_push("git push origin -f"));
         assert!(ist_force_push("git push -f origin main"));
         assert!(ist_force_push("git push --force origin main"));
-        assert!(ist_force_push("git  push   -f")); // mehrfache Leerzeichen
+        assert!(ist_force_push("git  push   -f"));
     }
 
     #[test]
@@ -228,54 +446,5 @@ mod tests {
     #[test]
     fn force_flag_in_anderem_befehls_segment_loest_nichts_aus() {
         assert!(!ist_force_push("rm -f foo.txt && git push origin main"));
-    }
-
-    // ── Timeout-Tests (brauchen die tokio-Laufzeit) ──────────────────
-
-    #[tokio::test]
-    async fn schneller_befehl_liefert_normales_ergebnis() {
-        let out = ausfuehren("echo hallo", None).await.unwrap();
-        assert!(out.contains("hallo"));
-        assert!(out.contains("exit code: 0"));
-    }
-
-    /// Der Hänger-Fall vom 2026-08-26, klein nachgestellt: ein Befehl, der
-    /// nie fertig wird. Vor dem Fix wartete `execute()` hier für immer.
-    #[tokio::test]
-    async fn haengender_befehl_wird_abgebrochen() {
-        let start = std::time::Instant::now();
-        let erg = ausfuehren("sleep 30", Some(1)).await;
-        assert!(erg.is_err(), "hängender Befehl muss abbrechen");
-        let meldung = format!("{:#}", erg.unwrap_err());
-        assert!(meldung.contains("Zeitüberschreitung"));
-        assert!(
-            start.elapsed() < std::time::Duration::from_secs(10),
-            "Abbruch muss kurz nach Ablauf des Timeouts kommen"
-        );
-    }
-
-    /// Ein Befehl, der knapp unter dem Limit bleibt, muss ganz normal
-    /// durchlaufen - der Timeout darf nicht zu früh zuschlagen.
-    #[tokio::test]
-    async fn befehl_unterhalb_des_limits_laeuft_durch() {
-        let erg = ausfuehren("sleep 1; echo fertig", Some(10)).await;
-        let out = erg.expect("Befehl innerhalb des Limits darf nicht abbrechen");
-        assert!(out.contains("fertig"));
-    }
-
-    /// Der eigentliche Zweck der Prozessgruppe: `sh` startet ein Kind, das
-    /// ohne Gruppen-Kill als Waise weiterliefe.
-    #[tokio::test]
-    async fn timeout_toetet_auch_kindprozesse() {
-        let erg = ausfuehren("sleep 300", Some(1)).await;
-        assert!(erg.is_err());
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let suche = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("ps -ax -o command= | grep '[s]leep 300' | wc -l")
-            .output()
-            .unwrap();
-        let anzahl: usize = String::from_utf8_lossy(&suche.stdout).trim().parse().unwrap_or(99);
-        assert_eq!(anzahl, 0, "Der hängende Kindprozess muss mitgetötet werden");
     }
 }

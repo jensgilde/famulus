@@ -37,7 +37,6 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 struct LaufenderAuftrag {
     handle: tokio::task::JoinHandle<()>,
     ui: Arc<dyn Ui>,
-    terminiert: Arc<AtomicBool>,
 }
 static LAUFENDER_AUFTRAG: LazyLock<Mutex<Option<LaufenderAuftrag>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -216,7 +215,7 @@ pub fn starte_auftrag(auftrag: String, verlauf_json: String, cb: Box<dyn Auftrag
         }
     });
 
-    *LAUFENDER_AUFTRAG.lock().unwrap_or_else(|e| e.into_inner()) = Some(LaufenderAuftrag { handle, ui, terminiert });
+    *LAUFENDER_AUFTRAG.lock().unwrap_or_else(|e| e.into_inner()) = Some(LaufenderAuftrag { handle, ui });
 }
 
 /// Bricht den laufenden Auftrag ab und meldet der Hülle `Abgebrochen`.

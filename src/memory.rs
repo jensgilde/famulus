@@ -199,6 +199,18 @@ impl Gedaechtnis {
             );",
         )?;
 
+        // Migration für Bestands-DBs: Fehlergrund-Spalte nachrüsten.
+        // `fehler` ist NULL bei Erfolgen und bei Einträgen, die vor dieser
+        // Spalte geschrieben wurden (die können keinen Grund mehr liefern).
+        let spalten: Vec<String> = verbindung
+            .prepare("PRAGMA table_info(provider_statistik)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !spalten.iter().any(|s| s == "fehler") {
+            verbindung.execute_batch("ALTER TABLE provider_statistik ADD COLUMN fehler TEXT;")?;
+        }
+
         Ok(Self {
             verbindung: Mutex::new(verbindung),
         })
@@ -696,13 +708,33 @@ impl Gedaechtnis {
         provider: &str,
         erfolg: bool,
         dauer_ms: u64,
+        fehler: Option<&str>,
     ) -> Result<()> {
         let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         verbindung.execute(
-            "INSERT INTO provider_statistik (provider, erfolg, dauer_ms) VALUES (?1, ?2, ?3)",
-            params![provider, erfolg as i64, dauer_ms as i64],
+            "INSERT INTO provider_statistik (provider, erfolg, dauer_ms, fehler) VALUES (?1, ?2, ?3, ?4)",
+            params![provider, erfolg as i64, dauer_ms as i64, fehler.map(|f| f.chars().take(300).collect::<String>())],
         )?;
         Ok(())
+    }
+
+    /// Häufigste Fehlergründe je Provider (nur Fehlschläge) - die Antwort
+    /// auf „27× hyper fehlgeschlagen: warum?“ aus dem Audit (401/429/
+    /// Timeout). Liefert pro Provider die häufigsten Fehlertexte mit Anzahl.
+    pub fn provider_fehler_statistik(&self) -> Result<Vec<(String, i64, String)>> {
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = verbindung.prepare(
+            "SELECT provider, count(*) AS n, COALESCE(fehler, '(kein Grund)')
+             FROM provider_statistik
+             WHERE erfolg = 0
+             GROUP BY provider, fehler
+             ORDER BY provider, n DESC",
+        )?;
+        let ergebnisse = stmt
+            .query_map([], |zeile| Ok((zeile.get(0)?, zeile.get(1)?, zeile.get(2)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ergebnisse)
     }
 
     /// Erfolgsquote und Durchschnittslatenz je Provider, absteigend nach
@@ -999,13 +1031,13 @@ mod tests {
     fn provider_statistik_rechnet_erfolgsquote_und_durchschnitt() {
         let pfad = temp();
         let g = Gedaechtnis::oeffnen(&pfad).unwrap();
-        g.provider_aufruf_protokollieren("hyper", true, 1000)
+        g.provider_aufruf_protokollieren("hyper", true, 1000, None)
             .unwrap();
-        g.provider_aufruf_protokollieren("hyper", true, 2000)
+        g.provider_aufruf_protokollieren("hyper", true, 2000, None)
             .unwrap();
-        g.provider_aufruf_protokollieren("hyper", false, 3000)
+        g.provider_aufruf_protokollieren("hyper", false, 3000, None)
             .unwrap();
-        g.provider_aufruf_protokollieren("openrouter", true, 500)
+        g.provider_aufruf_protokollieren("openrouter", true, 500, None)
             .unwrap();
 
         let statistik = g.provider_statistik().unwrap();
