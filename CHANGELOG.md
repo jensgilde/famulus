@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.13.0] – 2026-08-28
+
+### Entfernt
+- **Tauri-GUI endgültig aus dem Repo**: Der `gui/`-Ordner ist archiviert
+  (Google Drive) und gelöscht; der `[workspace]`-Abschnitt in `Cargo.toml`
+  entfällt, `famulus-core` ist jetzt ein eigenständiges Package. Die
+  Swift-Hülle (swift-app/) ist die einzige grafische Hülle.
+
+### Neu
+- **Datei-Upload in der Swift-Hülle**: Die Swift-Hülle hat jetzt wieder
+  den 📎-Upload, der seit der Tauri-Migration fehlte. Ein Klick auf die
+  Büroklammer öffnet den Dateidialog (nur Bilder, Mehrfachauswahl), die
+  Anhänge erscheinen als Vorschau-Chips über der Eingabe und lassen sich
+  einzeln entfernen. Angehängte Bilder gehen zusammen mit der Nachricht
+  über die FFI-Grenze an den Kern (`verlauf_zu_nachrichten` →
+  `Message::UserMitBild`), der sie an das Modell schickt. Bilder ohne
+  Text werden als „Beschreibe diese Datei(en)." gesendet – exakt die
+  Feature-Parität zum alten Tauri-GUI. Auch in der Chat-Historie werden
+  Anhänge jetzt als Thumbnails angezeigt und in der History-Datenbank
+  mitgespeichert.
+
+### Behoben
+- **Doppelte aktuelle Nachricht**: Beim Senden wurde die gerade
+  angehängte Nachricht zusätzlich im Verlauf-JSON mitgeschickt und
+  dadurch doppelt ans Modell übergeben. Jetzt wird sie wie in der
+  Tauri-GUI (`slice(0,-1)`) aus dem Verlauf herausgenommen.
+
+### Behoben (Kern, aus Vorarbeiten übernommen)
+- **Renn-Fenster beim Stoppen**: `stoppe_auftrag()` prüfte früher mit
+  `is_finished()`, ob der Task sein Abschluss-Ereignis schon selbst
+  gesendet hatte – zwischen Check und Abort konnte der Task fertig
+  werden, und die Hülle bekam „Fertig" UND „Abgebrochen" (leere Doppel-
+  Nachricht). Jetzt entscheidet ein `terminiert`-Atomic in der neuen
+  `TerminaleUi`, wer das terminale Ereignis senden darf – ohne
+  Renn-Fenster.
+- **Poisoned-Mutex-Panics**: Alle Zugriffe auf die FFI-Statics
+  (`LAUFENDER_AUFTRAG`, `ZWISCHENFRAGE_KANAL`) nutzen jetzt
+  `unwrap_or_else(|e| e.into_inner())` statt nacktem `unwrap()`.
+
+### Geändert
+- **Stabile Codesignatur für die App**: `build-app.sh` signiert jetzt
+  mit dem echten Entwickler-Zertifikat statt Ad-hoc, damit macOS-
+  Ordnerfreigaben (TCC) über Builds hinweg erhalten bleiben – derselbe
+  Fix wie 64bd20d für die CLI-Binaries.
+- Version-Bump auf 0.13.0 (neues Feature = Minor nach SemVer).
+- `project.yml` und Header-Versionen auf 0.13.0 angeglichen.
+
+
 ## [0.12.1] – 2026-08-28
 
 ### Behoben

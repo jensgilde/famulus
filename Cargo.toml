@@ -1,16 +1,15 @@
-# Famulus v0.10.0 – Header-Version via env!("CARGO_PKG_VERSION")
+# Famulus v0.13.0 – Header-Version via env!("CARGO_PKG_VERSION")
 # (Präferenz von Jens: Version im Build aus Cargo.toml, kein manuelles Setzen.)
 #
-# v0.10.0: UniFFI-Brücke für die native Swift-Hülle (swift-app/).
-# Der Kern bleibt derselbe – die Brücke ist eine zusätzliche Schicht.
-# (Muster: Famulus Games v0.2.0, dort bewährt.)
-
-[workspace]
-members = ["gui"]
+# v0.13.0: Tauri-GUI wurde entfernt (2026-08-28, archiviert auf Google Drive);
+# die native Swift-Hülle (swift-app/) ist jetzt die einzige grafische Hülle.
+# Der Workspace enthielt vorher noch das Mitglied "gui" - seit der Löschung
+# des Ordners blockierte das jeden cargo-Lauf. Der [workspace]-Abschnitt ist
+# deshalb entfernt: famulus-core ist jetzt ein eigenständiges Package.
 
 [package]
 name = "famulus-core"
-version = "0.12.1"
+version = "0.13.0"
 edition = "2021"
 description = "Famulus: persönlicher KI-Agent mit vollem Rechnerzugriff, austauschbarem LLM-Backend und harten Sicherheitsgrenzen."
 

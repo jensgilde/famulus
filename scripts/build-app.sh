@@ -10,6 +10,16 @@
 #   3. Xcode-Projekt generieren (xcodegen)
 #   4. App bauen (xcodebuild Release)
 #   5. signieren, atomar installieren, starten
+#
+# WICHTIG – stabile Codesignatur für macOS-Ordnerfreigaben (TCC):
+#   macOS merkt sich Ordner-Freigaben anhand der Codesignatur-Identität.
+#   Bei AD-HOC-Signatur ist die Identität der reine Code-Hash (cdhash) –
+#   und der ändert sich mit JEDEM Build. Folge: macOS hält jede neue
+#   Version für ein "anderes Programm" und vergisst alle erteilten
+#   Freigaben; der Nutzer muss jedes Mal neu freigeben.
+#   Abhilfe: mit dem echten Entwickler-Zertifikat signieren. Dann ist die
+#   Identität (Zertifikat + Bundle-ID) über Builds hinweg stabil und die
+#   Freigaben bleiben dauerhaft erhalten.
 
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH:/opt/homebrew/bin"
@@ -38,7 +48,25 @@ if [ ! -d "$BUNDLE" ]; then
 fi
 
 echo "==> 4/4 Signiere und installiere atomar nach $DEST..."
-codesign --force --deep --sign - "$BUNDLE" >/dev/null 2>&1 || true
+# Signatur mit dem echten Entwickler-Zertifikat (stabile Identität für
+# macOS-Ordnerfreigaben). Fallback auf Ad-hoc nur wenn kein Zertifikat
+# vorhanden – dann gehen Freigaben bei jedem Build verloren.
+SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep -o '"Apple Development: [^"]*"' | head -1 | tr -d '"')
+
+if [ -n "$SIGN_IDENTITY" ]; then
+    echo "Signatur-Identität: $SIGN_IDENTITY"
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$BUNDLE" 2>&1 \
+        | grep -v "replacing existing signature" || true
+else
+    echo "WARNUNG: Kein Entwickler-Zertifikat gefunden – Ad-hoc-Signatur."
+    echo "         Ordner-Freigaben gehen bei jedem Build verloren!"
+    codesign --force --deep --sign - "$BUNDLE" >/dev/null 2>&1 || true
+fi
+
+# Quarantäne-Attribut entfernen, falls vorhanden (lokal gebaut → unnötig)
+xattr -dr com.apple.quarantine "$BUNDLE" 2>/dev/null || true
+
 rm -rf "$BACKUP"
 if [ -d "$DEST" ]; then
     mv "$DEST" "$BACKUP"

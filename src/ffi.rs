@@ -1,8 +1,8 @@
-// Famulus – UniFFI-Brücke v0.12.1.
-// Dünne FFI-Schicht für die native Swift-Hülle (swift-app/).
-// Enthält auch die Logik, die vorher nur im Tauri-GUI wohnte
-// (Modell-Liste, TOML-Umschaltung, History-Zugriff), damit der Kern sie
-// allen Hüllen anbieten kann – Tauri eingeschlossen.
+// Famulus – UniFFI-Brücke v0.13.0.
+// Dünne FFI-Schicht für die native Swift-Hülle (swift-app/), seit dem
+// Entfernen des Tauri-GUI (2026-08-28, archiviert auf Google Drive) die
+// einzige grafische Hülle. Enthält auch die Logik, die vorher nur im
+// Tauri-GUI wohnte (Modell-Liste, TOML-Umschaltung, History-Zugriff).
 // Muster: Famulus Games bridge.rs (dort bewährt seit v0.2.0).
 
 use crate::agent::Agent;
@@ -11,6 +11,7 @@ use crate::history::History;
 use crate::llm::{self, BildAnhang, Message};
 use crate::presets::PresetsConfig;
 use crate::ui::{AgentEvent, Ui};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 // ---------------------------------------------------------------- Runtime
@@ -30,10 +31,13 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 /// abbrechen kann. Nur einer gleichzeitig - dieselbe Regel wie in der GUI.
 /// Die Ereignis-Senke wird mit abgelegt: Ein hart abgebrochener Tokio-Task
 /// kann selbst kein `Abgebrochen` mehr senden - stoppe_auftrag emittiert
-/// das Ereignis deshalb nach dem abort() selbst (Muster aus gui/src/lib.rs).
+/// das Ereignis deshalb nach dem abort() selbst (Muster aus der Tauri-GUI,
+/// heute archiviert). Das `terminiert`-Atomic entscheidet ohne Renn-Fenster,
+/// wer das terminale Ereignis (Fertig/Abgebrochen) senden darf.
 struct LaufenderAuftrag {
     handle: tokio::task::JoinHandle<()>,
     ui: Arc<dyn Ui>,
+    terminiert: Arc<AtomicBool>,
 }
 static LAUFENDER_AUFTRAG: LazyLock<Mutex<Option<LaufenderAuftrag>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -98,10 +102,33 @@ impl Ui for FfiUi {
     }
 }
 
+/// Wickelt eine Ereignis-Senke so, dass terminale Ereignisse
+/// (Fertig/Abgebrochen) höchstens einmal durchkommen. Der Atomic-Swap ist
+/// der Schiedsrichter zwischen dem Task selbst und stoppe_auftrag(): Wird
+/// der Auftrag exakt im Moment des Stops fertig, sendet genau eine Seite -
+/// früher konnte hier ein `is_finished()`-Check im Renn-Fenster liegen und
+/// die Hülle bekam erst „Fertig" und dann „Abgebrochen" (leere Doppel-
+/// Nachricht). Normale Ereignisse (Text, ToolStart, ...) laufen unverändert
+/// durch.
+struct TerminaleUi {
+    inner: Arc<dyn Ui>,
+    terminiert: Arc<AtomicBool>,
+}
+
+impl Ui for TerminaleUi {
+    fn ereignis(&self, ereignis: AgentEvent) {
+        let terminal = matches!(ereignis, AgentEvent::Fertig | AgentEvent::Abgebrochen { .. });
+        if terminal && self.terminiert.swap(true, Ordering::SeqCst) {
+            return; // jemand anderes hat das terminale Ereignis schon gesendet
+        }
+        self.inner.ereignis(ereignis);
+    }
+}
+
 // ---------------------------------------------------------------- Auftrag
 
 /// Verlauf (JSON-Array) in Kern-Nachrichten wandeln. Gleicher Vertrag wie
-/// gui/src/lib.rs::verlauf_zu_nachrichten.
+/// früher gui/src/lib.rs::verlauf_zu_nachrichten (Tauri-GUI, archiviert).
 fn verlauf_zu_nachrichten(json: &str) -> Vec<Message> {
     #[derive(serde::Deserialize)]
     struct Anhang {
@@ -150,15 +177,19 @@ fn verlauf_zu_nachrichten(json: &str) -> Vec<Message> {
 /// asynchron über das Callback. Ein bereits laufender Auftrag wird vorher
 /// abgebrochen (wie in der GUI).
 pub fn starte_auftrag(auftrag: String, verlauf_json: String, cb: Box<dyn AuftragsCallback>) {
-    if let Some(alt) = LAUFENDER_AUFTRAG.lock().unwrap().take() {
+    if let Some(alt) = LAUFENDER_AUFTRAG.lock().unwrap_or_else(|e| e.into_inner()).take() {
         alt.handle.abort();
     }
 
     let (zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
-    *ZWISCHENFRAGE_KANAL.lock().unwrap() = Some(zf_tx);
+    *ZWISCHENFRAGE_KANAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(zf_tx);
 
     let cb: Arc<dyn AuftragsCallback> = cb.into();
-    let ui: Arc<dyn Ui> = Arc::new(FfiUi { cb });
+    let terminiert = Arc::new(AtomicBool::new(false));
+    let ui: Arc<dyn Ui> = Arc::new(TerminaleUi {
+        inner: Arc::new(FfiUi { cb }),
+        terminiert: Arc::clone(&terminiert),
+    });
 
     let task_ui = Arc::clone(&ui);
     let handle = RUNTIME.spawn(async move {
@@ -185,32 +216,36 @@ pub fn starte_auftrag(auftrag: String, verlauf_json: String, cb: Box<dyn Auftrag
         }
     });
 
-    *LAUFENDER_AUFTRAG.lock().unwrap() = Some(LaufenderAuftrag { handle, ui });
+    *LAUFENDER_AUFTRAG.lock().unwrap_or_else(|e| e.into_inner()) = Some(LaufenderAuftrag { handle, ui, terminiert });
 }
 
 /// Bricht den laufenden Auftrag ab und meldet der Hülle `Abgebrochen`.
 /// Der abort() allein reicht nicht: Ein hart beendeter Tokio-Task sendet
 /// selbst kein Abschluss-Ereignis mehr, die Hülle bliebe für immer im
 /// Beschäftigt-Zustand (Bug: "toter" Stop-Button). Das Ereignis wird
-/// deshalb hier emittiert - exakt das Muster aus gui/src/lib.rs.
+/// deshalb hier emittiert - exakt das Muster aus der Tauri-GUI (archiviert).
+/// Der `terminiert`-Swap ersetzt den früheren `is_finished()`-Check, der
+/// ein Renn-Fenster hatte (Task wird zwischen Check und abort fertig).
 pub fn stoppe_auftrag() {
-    if let Some(auftrag) = LAUFENDER_AUFTRAG.lock().unwrap().take() {
-        if !auftrag.handle.is_finished() {
-            auftrag.handle.abort();
-            auftrag.ui.ereignis(AgentEvent::Abgebrochen {
-                fehler: "Abgebrochen.".to_string(),
-            });
-        }
-        // Ist der Task bereits fertig, hat er sein Abschluss-Ereignis
-        // (Fertig/Abgebrochen) schon selbst gesendet.
+    if let Some(auftrag) = LAUFENDER_AUFTRAG.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        auftrag.handle.abort();
+        // Ob der Task sein Abschluss-Ereignis (Fertig) nicht vielleicht
+        // schon selbst gesendet hat, entscheidet der `terminiert`-Swap in
+        // TerminaleUi: Hat er, wird dieses `Abgebrochen` verworfen; hat er
+        // nicht, kommt es durch und beendet den Beschäftigt-Zustand der
+        // Hülle (Bug "toter Stop-Button"). Nicht hier selbst swapen -
+        // sonst würde TerminaleUi genau dieses Ereignis wieder filtern.
+        auftrag.ui.ereignis(AgentEvent::Abgebrochen {
+            fehler: "Abgebrochen.".to_string(),
+        });
     }
-    *ZWISCHENFRAGE_KANAL.lock().unwrap() = None;
+    *ZWISCHENFRAGE_KANAL.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// Schickt eine Zwischenfrage an den laufenden Auftrag, ohne ihn
 /// abzubrechen - siehe agent.rs::run_task.
 pub fn zwischenfrage(text: String) {
-    if let Some(tx) = ZWISCHENFRAGE_KANAL.lock().unwrap().as_ref() {
+    if let Some(tx) = ZWISCHENFRAGE_KANAL.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         let _ = tx.send(text);
     }
 }
@@ -223,7 +258,7 @@ pub fn app_version() -> String {
 }
 
 /// Baut die kurze Statuszeile ("hyper · deepseek-v4-pro · max. 997
-/// Schritte") - gleiche Logik wie gui/src/lib.rs::zustand_text.
+/// Schritte") - gleiche Logik wie früher gui/src/lib.rs::zustand_text.
 fn zustand_text(config: &Config) -> String {
     let modell_teil = if config.modell_modus == "automatisch" {
         "automatisch (Famulus wählt)".to_string()
@@ -276,7 +311,7 @@ pub fn aktiver_provider() -> String {
 }
 
 /// Verfügbare Modelle eines Providers als JSON-Array (id-Feld), gleiche
-/// Logik und Filter wie gui/src/lib.rs::modelle_liste.
+/// Logik und Filter wie früher gui/src/lib.rs::modelle_liste (archiviert).
 pub fn modelle_liste(provider: String) -> Result<String, Fehler> {
     // Ollama: lokale Modelle von /api/tags (kein API-Key nötig).
     if provider == "ollama" {
@@ -580,5 +615,49 @@ mod tests {
     #[test]
     fn setze_modell_modus_lehnt_unbekannten_modus_ab() {
         assert!(setze_modell_modus("quatsch".into()).is_err());
+    }
+
+    // ── TerminaleUi: genau ein terminales Ereignis ────────────────────
+
+    /// Zählt alle Ereignisse - zum Prüfen, was an der Hülle ankommt.
+    struct SammelUi {
+        ereignisse: Mutex<Vec<AgentEvent>>,
+    }
+
+    impl Ui for SammelUi {
+        fn ereignis(&self, ereignis: AgentEvent) {
+            self.ereignisse.lock().unwrap().push(ereignis);
+        }
+    }
+
+    #[test]
+    fn terminale_ui_laesst_nur_ein_terminales_ereignis_durch() {
+        // Das konkrete SammelUi behalten wir als Griff, bevor es hinter
+        // `dyn Ui` verschwindet - so können wir das Ergebnis ohne
+        // Downcast ablesen. (Direkte Zuweisung statt Arc::clone, weil der
+        // Unsize-Coerce nur an der Zuweisungsstelle greift.)
+        let sammel = Arc::new(SammelUi {
+            ereignisse: Mutex::new(Vec::new()),
+        });
+        let inner: Arc<dyn Ui> = sammel.clone();
+        let terminiert = Arc::new(AtomicBool::new(false));
+        let ui = TerminaleUi {
+            inner,
+            terminiert: Arc::clone(&terminiert),
+        };
+
+        // Normales Ereignis kommt immer durch.
+        ui.ereignis(AgentEvent::Erinnert { anzahl: 3 });
+        // Erstes terminales Ereignis kommt durch.
+        ui.ereignis(AgentEvent::Fertig);
+        // Zweites terminales (z.B. der parallele abort-Pfad) wird gefiltert.
+        ui.ereignis(AgentEvent::Abgebrochen {
+            fehler: "Abgebrochen.".to_string(),
+        });
+
+        let liste = sammel.ereignisse.lock().unwrap();
+        assert_eq!(liste.len(), 2, "Text-Ereignis + genau ein terminales Ereignis");
+        assert!(matches!(&liste[0], AgentEvent::Erinnert { anzahl: 3 }));
+        assert!(matches!(&liste[1], AgentEvent::Fertig));
     }
 }

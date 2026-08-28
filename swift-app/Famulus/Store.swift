@@ -1,4 +1,4 @@
-// Famulus – Zustandsmodell der nativen SwiftUI-Hülle v0.12.1.
+// Famulus – Zustandsmodell der nativen SwiftUI-Hülle v0.13.0.
 // Ruft den Rust-Kern über die UniFFI-Bindings (Generated/).
 // Dieselbe Ereignis-Logik wie ui/index.html der Tauri-GUI:
 // Agent-Ereignisse kommen als JSON über das AuftragsCallback und
@@ -6,8 +6,18 @@
 
 import SwiftUI
 import Observation
+import AppKit
 
 // ── Datenmodelle ────────────────────────────────────────────────────────
+
+/// Eine an eine Nachricht angehängte Datei (Bild). Entspricht dem
+/// `anhaenge`-JSON der Tauri-GUI (dort: fileZuBase64).
+struct Anhang: Codable, Identifiable, Equatable {
+    var name: String
+    var medienTyp: String
+    var base64: String
+    var id = UUID()
+}
 
 /// Eine gespeicherte Chat-Nachricht. `rolle` ist "user" / "assistant" /
 /// "fehler". Entspricht dem `nachrichten`-JSON der Tauri-GUI.
@@ -15,6 +25,8 @@ struct ChatNachricht: Codable, Identifiable, Equatable {
     var rolle: String
     var inhalt: String
     var zeitstempel: TimeInterval
+    /// Angehängte Dateien (Bilder) – Feature-Parität zur Tauri-GUI.
+    var anhaenge: [Anhang] = []
     /// Stable ID für ForEach – wird beim Dekodieren vergeben.
     var id = UUID()
 }
@@ -77,6 +89,9 @@ final class FamulusStore {
     var beschaeftigt = false
     var denktText = ""
     var agentSchritte: [Schritt] = []
+
+    /// Angehängte Dateien, die mit der nächsten Nachricht rausgehen.
+    var anhaengeStaging: [Anhang] = []
 
     // Statusbar
     var status = "Bereit"
@@ -169,7 +184,8 @@ final class FamulusStore {
 
     func senden(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        // Wie in der Tauri-GUI: Bild ohne Text ist ein gültiger Auftrag.
+        guard !trimmed.isEmpty || !anhaengeStaging.isEmpty else { return }
 
         // Beschäftigt: als Zwischenfrage senden – wie die Tauri-Referenz
         // (ui/index.html::sendeZwischenfrage). Kein neuer Auftrag, der
@@ -184,9 +200,15 @@ final class FamulusStore {
             return
         }
 
+        // Staging-Anhänge an die Nachricht hängen (Tauri-GUI: aktuelleAnhaenge).
+        let aktuelleAnhaenge = anhaengeStaging
+        anhaengeStaging = []
+
         var chat = aktiverChat
         chat.nachrichten.append(ChatNachricht(
-            rolle: "user", inhalt: trimmed, zeitstempel: Date.now.timeIntervalSince1970 * 1000))
+            rolle: "user", inhalt: trimmed.isEmpty ? "(Bild)" : trimmed,
+            zeitstempel: Date.now.timeIntervalSince1970 * 1000,
+            anhaenge: aktuelleAnhaenge))
         if chat.titel == "Neuer Chat" {
             chat.titel = String(trimmed.prefix(40))
         }
@@ -200,9 +222,22 @@ final class FamulusStore {
         status = "Denke…"
 
         // Verlauf als JSON für den Kern zusammenstellen.
-        let verlauf = chat.nachrichten
+        // Anhänge gehen als `anhaenge` mit über die FFI-Grenze – der Kern
+        // (ffi.rs::verlauf_zu_nachrichten) baut daraus Message::UserMitBild.
+        // dropLast(): die gerade angehängte Nachricht wird als `auftrag`
+        // übergeben – der Kern hängt sie selbst nochmal an (agent.rs).
+        // Ohne dropLast ginge sie doppelt ans Modell (Tauri-GUI: slice(0,-1)).
+        let verlauf = Array(chat.nachrichten.dropLast())
             .filter { $0.rolle == "user" || $0.rolle == "assistant" }
-            .map { ["rolle": $0.rolle, "inhalt": $0.inhalt] }
+            .map { n -> [String: Any] in
+                var d: [String: Any] = ["rolle": n.rolle, "inhalt": n.inhalt]
+                if !n.anhaenge.isEmpty {
+                    d["anhaenge"] = n.anhaenge.map { a -> [String: String] in
+                        ["medien_typ": a.medienTyp, "base64": a.base64]
+                    }
+                }
+                return d
+            }
         let verlaufDaten = (try? JSONSerialization.data(withJSONObject: verlauf)) ?? Data()
         let verlaufJson = String(data: verlaufDaten, encoding: .utf8) ?? "[]"
 
@@ -213,11 +248,38 @@ final class FamulusStore {
             }
         }
         self.senke = senke
-        starteAuftrag(auftrag: trimmed, verlaufJson: verlaufJson, cb: senke)
+        starteAuftrag(auftrag: trimmed.isEmpty ? "Beschreibe diese Datei(en)." : trimmed,
+                      verlaufJson: verlaufJson, cb: senke)
     }
 
     func stoppen() {
         stoppeAuftrag()
+    }
+
+    // ── Datei-Anhänge ────────────────────────────────────────────────────
+
+    /// Liest gewählte Dateien ein und hängt sie ans Staging. Nur Bilder –
+    /// der Kern schickt Anhänge als Bild ans Modell (Tauri-GUI: accept="image/*").
+    func dateienAnhaengen(_ urls: [URL]) {
+        for url in urls {
+            let ok = url.startAccessingSecurityScopedResource()
+            defer { if ok { url.stopAccessingSecurityScopedResource() } }
+            guard let daten = try? Data(contentsOf: url),
+                  NSImage(data: daten) != nil else { continue }
+            let ext = url.pathExtension.lowercased()
+            let mime = ext == "png" ? "image/png"
+                : ext == "gif" ? "image/gif"
+                : ext == "webp" ? "image/webp"
+                : "image/jpeg"
+            anhaengeStaging.append(Anhang(
+                name: url.lastPathComponent,
+                medienTyp: mime,
+                base64: daten.base64EncodedString()))
+        }
+    }
+
+    func anhangEntfernen(_ id: UUID) {
+        anhaengeStaging.removeAll { $0.id == id }
     }
 
     /// Ein einzelnes Agent-Ereignis in den Chat-Zustand übersetzen.
@@ -350,9 +412,15 @@ final class FamulusStore {
                 nachrichten = rohN.compactMap { n in
                     guard let rolle = n["rolle"] as? String,
                           let inhalt = n["inhalt"] as? String else { return nil }
+                    let anhaenge = (n["anhaenge"] as? [[String: Any]] ?? []).compactMap { a -> Anhang? in
+                        guard let mt = a["medien_typ"] as? String,
+                              let b64 = a["base64"] as? String else { return nil }
+                        return Anhang(name: a["name"] as? String ?? "", medienTyp: mt, base64: b64)
+                    }
                     return ChatNachricht(
                         rolle: rolle, inhalt: inhalt,
-                        zeitstempel: n["zeitstempel"] as? TimeInterval ?? 0)
+                        zeitstempel: n["zeitstempel"] as? TimeInterval ?? 0,
+                        anhaenge: anhaenge)
                 }
             }
             return Chat(sqliteId: id, titel: titel, nachrichten: nachrichten, createdAt: erstellt.timeIntervalSince1970)
@@ -363,6 +431,11 @@ final class FamulusStore {
     private func speichern(chat: Chat) -> Int64? {
         let nachrichten = chat.nachrichten.map { m -> [String: Any] in
             var dict: [String: Any] = ["rolle": m.rolle, "inhalt": m.inhalt, "zeitstempel": m.zeitstempel]
+            if !m.anhaenge.isEmpty {
+                dict["anhaenge"] = m.anhaenge.map { a -> [String: String] in
+                    ["name": a.name, "medien_typ": a.medienTyp, "base64": a.base64]
+                }
+            }
             return dict
         }
         let daten = (try? JSONSerialization.data(withJSONObject: nachrichten)) ?? Data()

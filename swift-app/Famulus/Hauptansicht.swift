@@ -1,4 +1,4 @@
-// Famulus – Hauptansicht der nativen SwiftUI-Hülle v0.12.1.
+// Famulus – Hauptansicht der nativen SwiftUI-Hülle v0.13.0.
 // Phoenix-Style wie Tankmonitor und die Webseite: dunkle Grundfläche
 // #1e1e1e, weicher Orange-Fade oben, Akzent #f97316.
 //
@@ -8,6 +8,8 @@
 // Links: aktive Chats. Unten: Statusbar mit Zustand und Credits.
 
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 struct Hauptansicht: View {
     @State private var store = FamulusStore()
@@ -269,6 +271,7 @@ struct ArchivZeile: View {
 struct ChatBereich: View {
     @Bindable var store: FamulusStore
     @State private var eingabe = ""
+    @State private var dateiDialogOffen = false
     @FocusState private var eingabeFokus: Bool
 
     var body: some View {
@@ -304,51 +307,116 @@ struct ChatBereich: View {
 
     // ── Eingabezeile ──
     private var eingabeZeile: some View {
-        HStack(spacing: 8) {
-            TextField(store.beschaeftigt
-                ? "Zwischenfrage stellen…"
-                : "Schreib Famulus einen Auftrag…",
-                text: $eingabe, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(Marke.text)
-                .focused($eingabeFokus)
-                .onSubmit { senden() }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Marke.eingabe))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Marke.rand, lineWidth: 1))
+        VStack(spacing: 6) {
+            // Staging-Vorschau angehängter Dateien (wie Tauri-GUI: renderAnhaenge).
+            if !store.anhaengeStaging.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(store.anhaengeStaging) { anhang in
+                            anhangChip(anhang)
+                        }
+                    }
+                }
+            }
 
-            if store.beschaeftigt {
-                // Stoppt den laufenden Auftrag. Der Kern emittiert danach
-                // selbst `Abgebrochen` (ffi.rs::stoppe_auftrag), sodass der
-                // Chat-Bereich zuverlässig aus dem Beschäftigt-Zustand kommt.
-                Button(action: store.stoppen) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Marke.gefahr)
+            HStack(spacing: 8) {
+                // Datei-Anhang – Feature-Parität zum 📎-Button der Tauri-GUI.
+                Button {
+                    dateiDialogOffen = true
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 12))
+                        .foregroundStyle(store.beschaeftigt ? Marke.textHauch : Marke.textLeise)
                         .padding(8)
                 }
                 .buttonStyle(.plain)
-                .help("Auftrag abbrechen")
-            }
+                .disabled(store.beschaeftigt)
+                .help("Bild anhängen")
+                .fileImporter(isPresented: $dateiDialogOffen,
+                              allowedContentTypes: [.image],
+                              allowsMultipleSelection: true) { ergebnis in
+                    if case .success(let urls) = ergebnis {
+                        store.dateienAnhaengen(urls)
+                    }
+                }
 
-            // Beschäftigt: sendet die Zwischenfrage (store.senden verzweigt
-            // selbst), sonst einen neuen Auftrag – wie in der Tauri-Referenz.
-            Button(action: senden) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(eingabe.trimmingCharacters(in: .whitespaces).isEmpty
-                        ? Marke.textHauch : Marke.akzent)
-                    .padding(8)
+                TextField(store.beschaeftigt
+                    ? "Zwischenfrage stellen…"
+                    : "Schreib Famulus einen Auftrag…",
+                    text: $eingabe, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Marke.text)
+                    .focused($eingabeFokus)
+                    .onSubmit { senden() }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Marke.eingabe))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Marke.rand, lineWidth: 1))
+
+                if store.beschaeftigt {
+                    // Stoppt den laufenden Auftrag. Der Kern emittiert danach
+                    // selbst `Abgebrochen` (ffi.rs::stoppe_auftrag), sodass der
+                    // Chat-Bereich zuverlässig aus dem Beschäftigt-Zustand kommt.
+                    Button(action: store.stoppen) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Marke.gefahr)
+                            .padding(8)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Auftrag abbrechen")
+                }
+
+                // Beschäftigt: sendet die Zwischenfrage (store.senden verzweigt
+                // selbst), sonst einen neuen Auftrag – wie in der Tauri-Referenz.
+                Button(action: senden) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(leerZumSenden ? Marke.textHauch : Marke.akzent)
+                        .padding(8)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
     }
 
+    /// Senden-Button ist aktiv, wenn Text ODER Anhänge da sind.
+    private var leerZumSenden: Bool {
+        eingabe.trimmingCharacters(in: .whitespaces).isEmpty && store.anhaengeStaging.isEmpty
+    }
+
+    private func anhangChip(_ anhang: Anhang) -> some View {
+        HStack(spacing: 6) {
+            if let daten = Data(base64Encoded: anhang.base64), let bild = NSImage(data: daten) {
+                Image(nsImage: bild)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 28, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            Text(anhang.name)
+                .font(.system(size: 10))
+                .foregroundStyle(Marke.textSekundär)
+                .lineLimit(1)
+            Button {
+                store.anhangEntfernen(anhang.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Marke.textLeise)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Marke.eingabe))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Marke.rand, lineWidth: 1))
+    }
+
     private func senden() {
         let text = eingabe
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !store.anhaengeStaging.isEmpty else { return }
         eingabe = ""
         store.senden(text)
     }
@@ -407,6 +475,24 @@ struct NachrichtenZeile: View {
                 .font(.system(size: 13))
                 .foregroundStyle(istFehler ? Marke.gefahr : Marke.text)
                 .textSelection(.enabled)
+
+            // Angehängte Bilder als Thumbnails (Feature-Parität zur Tauri-GUI).
+            if !nachricht.anhaenge.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(nachricht.anhaenge) { anhang in
+                        if let daten = Data(base64Encoded: anhang.base64),
+                           let bild = NSImage(data: daten) {
+                            Image(nsImage: bild)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: 120, maxHeight: 120)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .overlay(RoundedRectangle(cornerRadius: 4)
+                                    .stroke(Marke.rand, lineWidth: 1))
+                        }
+                    }
+                }
+            }
         }
         .padding(12)
         .background(
