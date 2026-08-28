@@ -398,6 +398,16 @@ pub fn modelle_liste(provider: String) -> Result<String, Fehler> {
                         .as_array()
                         .is_some_and(|p| p.iter().any(|v| v.as_str() == Some("tools")))
                 })
+                // ":batch"-Varianten laufen nur über OpenRouns separate
+                // Batch-API (asynchron, Stunden Latenz) - über den normalen
+                // chat/completions-Endpunkt, den Famulus benutzt, liefern
+                // sie immer "404: only available through the Batch API".
+                // Live geprüft (2026-08-28): 39 von 330 Modellen betroffen.
+                .filter(|m| {
+                    m["id"]
+                        .as_str()
+                        .is_some_and(|id| !id.ends_with(":batch"))
+                })
                 .collect(),
         ),
         _ => serde_json::json!([]),
