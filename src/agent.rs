@@ -115,6 +115,14 @@ impl Agent {
             tools.insert(notizbuch.definition().name.clone(), notizbuch);
         }
 
+        // ── Vergessen-Werkzeug: Gegenstück zum Merken, siehe tools/erinnerung.rs ─
+        if let Some(ref g) = gedaechtnis {
+            let vergessen = Box::new(crate::tools::erinnerung::ErinnerungVergessenTool {
+                gedaechtnis: Arc::clone(g),
+            });
+            tools.insert(vergessen.definition().name.clone(), vergessen);
+        }
+
         // ── Stufe 1: Vault-Suche-Tool (braucht den Gedächtnis-Index, kann
         // deshalb nicht wie die anderen Vault-Tools über all_tools() aus
         // der Config allein gebaut werden) ─

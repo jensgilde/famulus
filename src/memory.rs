@@ -87,6 +87,14 @@ fn praeferenz_limit(hoechstens: usize) -> usize {
     hoechstens.div_ceil(2).max(1)
 }
 
+/// Obere Schranke für das anfängliche Laden ALLER Präferenzen (vor dem
+/// `take(praeferenz_limit(...))`-Deckel), rein zur Absicherung gegen
+/// unbegrenztes Wachstum der Tabelle - bei den heute beobachteten
+/// Größenordnungen (einige hundert Präferenzen) ändert das nichts am
+/// Verhalten, verhindert aber, dass eine irgendwann fünfstellige Zeilenzahl
+/// bei jedem einzelnen Auftrag komplett eingelesen wird.
+const PRAEFERENZ_LADE_DECKEL: i64 = 2000;
+
 pub struct Gedaechtnis {
     verbindung: Mutex<Connection>,
 }
@@ -122,6 +130,13 @@ impl Gedaechtnis {
         // `notizbuch`-Werkzeugaufruf reicht so einen Fehler über `?` direkt
         // als fehlgeschlagenen Tool-Call ans Modell durch.
         verbindung.busy_timeout(std::time::Duration::from_secs(5))?;
+
+        // SQLite prüft Fremdschlüssel nur, wenn das PRAGMA explizit gesetzt
+        // wird - ohne das kaskadiert `erinnerungen_embedding`s "ON DELETE
+        // CASCADE" (siehe Stufe 2 unten) trotz korrekt deklariertem Schema
+        // nie: Löscht `vergessen()` eine Erinnerung, blieb ihr Embedding als
+        // Leiche in `erinnerungen_embedding` zurück.
+        verbindung.execute_batch("PRAGMA foreign_keys = ON;")?;
 
         // ── Basis-Tabellen ────────────────────────────────────────────
         verbindung.execute_batch(
@@ -248,18 +263,69 @@ impl Gedaechtnis {
         Ok(geaendert > 0)
     }
 
+    /// Ab dieser Ähnlichkeit gilt eine neue Erinnerung als semantisches
+    /// Duplikat einer bestehenden derselben `art` und wird verworfen. Das
+    /// exakte `UNIQUE` auf `inhalt` (siehe `merken()`) erkennt nur
+    /// wortgleiche Wiederholungen - eine vom Rückblick-Modell nur leicht
+    /// anders formulierte Erkenntnis rutscht daran vorbei und würde sich
+    /// sonst unbemerkt vervielfachen. 0.93 ist bewusst hoch angesetzt:
+    /// zwei bloß thematisch verwandte, aber inhaltlich verschiedene
+    /// Erinnerungen sollen beide erhalten bleiben.
+    const AEHNLICHKEITS_SCHWELLE: f32 = 0.93;
+
     /// Wie `merken`, berechnet bei einer neuen Erinnerung aber sofort ihr
     /// Embedding (Stufe 2) – ohne das wäre frisch Gelerntes erst nach dem
     /// nächsten Start über `embeddings_nachholen` semantisch auffindbar.
+    ///
+    /// Prüft VOR dem Einfügen zusätzlich per Cosine-Similarity gegen alle
+    /// bestehenden Erinnerungen derselben `art`, ob es sich inhaltlich schon
+    /// um dieselbe Erkenntnis handelt - sonst führt der Rückblick nach
+    /// mehreren Aufträgen zu einer Prompt-Injektion, die dieselbe Lektion in
+    /// drei, vier Formulierungen gleichzeitig enthält.
     pub async fn merken_und_einbetten(&self, art: &str, inhalt: &str, quelle: &str) -> Result<bool> {
-        let neu = self.merken(art, inhalt, quelle)?;
+        let inhalt_getrimmt = inhalt.trim();
+        if inhalt_getrimmt.is_empty() {
+            return Ok(false);
+        }
+
+        if let Ok(kandidat) = Self::embedding_berechnen(inhalt_getrimmt).await {
+            let bestehende: Vec<(String, Vec<u8>)> = {
+                let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
+                let mut stmt = verbindung.prepare(
+                    "SELECT e.inhalt, em.embedding
+                     FROM erinnerungen e
+                     JOIN erinnerungen_embedding em ON e.id = em.id
+                     WHERE e.art = ?1",
+                )?;
+                let gefunden: Vec<(String, Vec<u8>)> = stmt
+                    .query_map(params![art], |zeile| Ok((zeile.get(0)?, zeile.get(1)?)))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                gefunden
+            };
+            for (bestehender_inhalt, bytes) in &bestehende {
+                let emb: Vec<f32> = bytes
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                if cosine_similarity(&kandidat, &emb) >= Self::AEHNLICHKEITS_SCHWELLE {
+                    eprintln!(
+                        "[memory] '{inhalt_getrimmt}' ist semantisch ein Duplikat von \
+                         '{bestehender_inhalt}' - nicht gespeichert."
+                    );
+                    return Ok(false);
+                }
+            }
+        }
+
+        let neu = self.merken(art, inhalt_getrimmt, quelle)?;
         if neu {
             let id: Option<i64> = {
                 let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
                 verbindung
                     .query_row(
                         "SELECT id FROM erinnerungen WHERE inhalt = ?1",
-                        params![inhalt.trim()],
+                        params![inhalt_getrimmt],
                         |r| r.get(0),
                     )
                     .ok()
@@ -288,8 +354,8 @@ impl Gedaechtnis {
         // Präferenzen, damit eine dadurch ausgeschlossene Präferenz nicht
         // über den Keyword-Fallback unten nochmal als "Fakt" reinrutscht.
         let alle_praefs = verbindung
-            .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC")?
-            .query_map(params![ART_PRAEFERENZ], |zeile| {
+            .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC LIMIT ?2")?
+            .query_map(params![ART_PRAEFERENZ, PRAEFERENZ_LADE_DECKEL], |zeile| {
                 Ok(Erinnerung {
                     art: zeile.get(0)?,
                     inhalt: zeile.get(1)?,
@@ -564,8 +630,8 @@ impl Gedaechtnis {
         let mut ergebnis: Vec<Erinnerung> = {
             let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
             let gefunden: Vec<Erinnerung> = verbindung
-                .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC")?
-                .query_map(params![ART_PRAEFERENZ], |zeile| {
+                .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC LIMIT ?2")?
+                .query_map(params![ART_PRAEFERENZ, PRAEFERENZ_LADE_DECKEL], |zeile| {
                     Ok(Erinnerung {
                         art: zeile.get(0)?,
                         inhalt: zeile.get(1)?,
@@ -594,7 +660,8 @@ impl Gedaechtnis {
         let mut bewertet: Vec<(f32, Erinnerung)> = {
             let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = verbindung.prepare(
-                "SELECT e.id, e.art, e.inhalt, em.embedding
+                "SELECT e.id, e.art, e.inhalt, em.embedding,
+                        julianday('now') - julianday(e.erstellt) AS alter_tage
                  FROM erinnerungen e
                  JOIN erinnerungen_embedding em ON e.id = em.id
                  WHERE e.art != ?1",
@@ -606,17 +673,18 @@ impl Gedaechtnis {
                     let art: String = zeile.get(1)?;
                     let inhalt: String = zeile.get(2)?;
                     let bytes: Vec<u8> = zeile.get(3)?;
-                    Ok((id, art, inhalt, bytes))
+                    let alter_tage: f64 = zeile.get(4).unwrap_or(0.0);
+                    Ok((id, art, inhalt, bytes, alter_tage))
                 })?
                 .filter_map(|r| r.ok())
-                .filter(|(_, _, inhalt, _)| gesehen.insert(inhalt.clone()))
-                .map(|(_, art, inhalt, bytes)| {
+                .filter(|(_, _, inhalt, _, _)| gesehen.insert(inhalt.clone()))
+                .map(|(_, art, inhalt, bytes, alter_tage)| {
                     let emb: Vec<f32> = bytes
                         .chunks_exact(4)
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect();
-                    let similarity = cosine_similarity(&query_emb, &emb);
-                    (similarity, Erinnerung { art, inhalt })
+                    let score = cosine_similarity(&query_emb, &emb) * recency_gewicht(alter_tage);
+                    (score, Erinnerung { art, inhalt })
                 })
                 .collect();
             gefunden
@@ -782,9 +850,54 @@ impl Gedaechtnis {
         let n: i64 = verbindung.query_row("SELECT count(*) FROM erinnerungen", [], |r| r.get(0))?;
         Ok(n as usize)
     }
+
+    // ── Vergessen ─────────────────────────────────────────────────────
+
+    /// Findet Erinnerungen, deren Inhalt einen Begriff enthält - Vorstufe zu
+    /// `vergessen()`: das Modell muss erst sehen, was zur Löschung ansteht,
+    /// damit ein zu allgemeiner Suchbegriff nicht versehentlich das Falsche
+    /// trifft. Gibt `(id, art, inhalt)` zurück.
+    pub fn erinnerung_suchen(&self, stichwort: &str) -> Result<Vec<(i64, String, String)>> {
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
+        // '%'/'_' sind LIKE-Sonderzeichen - im Suchbegriff entschärfen, sonst
+        // könnte ein Stichwort wie "50%" mehr treffen, als das Modell meint.
+        let muster = format!("%{}%", stichwort.replace(['%', '_'], ""));
+        let ergebnisse = verbindung
+            .prepare("SELECT id, art, inhalt FROM erinnerungen WHERE inhalt LIKE ?1 ORDER BY id DESC")?
+            .query_map(params![muster], |zeile| {
+                Ok((zeile.get(0)?, zeile.get(1)?, zeile.get(2)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ergebnisse)
+    }
+
+    /// Löscht eine Erinnerung per ID (aus `erinnerung_suchen()`). `false`
+    /// heißt: die ID gab es nicht (mehr). Das zugehörige Embedding kaskadiert
+    /// über `PRAGMA foreign_keys = ON` (siehe `oeffnen()`) automatisch weg,
+    /// der FTS5-Index über den `erinnerungen_fts_ad`-Trigger.
+    pub fn vergessen(&self, id: i64) -> Result<bool> {
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
+        let geloescht = verbindung.execute("DELETE FROM erinnerungen WHERE id = ?1", params![id])?;
+        Ok(geloescht > 0)
+    }
 }
 
 // ── Hilfsfunktionen ──────────────────────────────────────────────────
+
+/// Milder Recency-Bonus für die semantische Rangfolge: eine taufrische
+/// Erinnerung wiegt etwas mehr als eine ein Jahr alte mit sonst exakt
+/// gleicher Ähnlichkeit. Bewusst schwach (höchstens 15% Abschlag) und mit
+/// Untergrenze - eine alte, aber inhaltlich stark treffende Erinnerung soll
+/// nicht von einer neuen, schwächer passenden verdrängt werden. Ohne jede
+/// Alterskomponente zählte eine vor einem Jahr gemerkte Lektion exakt so
+/// viel wie eine von gestern, obwohl sich die Lage inzwischen geändert
+/// haben kann.
+fn recency_gewicht(alter_tage: f64) -> f32 {
+    const VERBLASSUNGS_FENSTER_TAGE: f64 = 180.0;
+    const MAX_ABSCHLAG: f64 = 0.15;
+    (1.0 - (alter_tage.max(0.0) / VERBLASSUNGS_FENSTER_TAGE).min(1.0) * MAX_ABSCHLAG) as f32
+}
 
 /// Cosine Similarity zwischen zwei Vektoren.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -836,7 +949,7 @@ fn sammle_markdown(wurzel: &Path, ordner: &Path, raus: &mut Vec<(String, String)
 /// Tägliche Selbstreflexion: aktualisiert das Selbstmodell und die
 /// Provider-Statistik. Wird von der GUI als Hintergrund-Task aufgerufen,
 /// alle 6 Stunden. Öffnet die DB bewusst frisch – kein Agent nötig.
-pub fn idle_reflexion() {
+pub async fn idle_reflexion() {
     eprintln!("[idle] Selbstreflexion gestartet...");
 
     let gedaechtnis = match crate::memory::Gedaechtnis::standard() {
@@ -866,6 +979,31 @@ pub fn idle_reflexion() {
         let _ = gedaechtnis.notizbuch_schreiben(&format!(
             "Idle-Reflexion: {} Erinnerungen im Gedächtnis.", anzahl
         ));
+    }
+
+    // 3. Selbstmodell aktualisieren, falls ein Vault konfiguriert ist -
+    // ohne diesen Schritt hielt der Docstring oben ein Versprechen, das der
+    // Code nie eingelöst hat: das Selbstbild (Wer-ist-Famulus.md) blieb
+    // zwischen echten `selbstmodell`-Werkzeugaufrufen (die nur während
+    // eines laufenden Auftrags passieren) tage- oder wochenlang veraltet.
+    match crate::config::Config::load() {
+        Ok(config) => {
+            if let Some(vault_pfad) = config.vault_pfad() {
+                let permissions = crate::permissions::PermissionManager::new(&config);
+                match crate::tools::selbstmodell::aktualisieren(
+                    &gedaechtnis,
+                    &vault_pfad,
+                    &permissions,
+                    "",
+                )
+                .await
+                {
+                    Ok(_) => eprintln!("[idle] Selbstmodell aktualisiert."),
+                    Err(e) => eprintln!("[idle] Selbstmodell-Update fehlgeschlagen: {e:#}"),
+                }
+            }
+        }
+        Err(e) => eprintln!("[idle] Config nicht ladbar, Selbstmodell nicht aktualisiert: {e:#}"),
     }
 
     eprintln!("[idle] Selbstreflexion abgeschlossen.");
@@ -1116,5 +1254,77 @@ mod tests {
         let limit = praeferenz_limit(12);
         assert!(limit < 12, "muss unter dem Gesamtbudget bleiben");
         assert_eq!(12 - limit, 6, "6 Slots müssen für Fakten/Lektionen übrig bleiben");
+    }
+
+    // ── recency_gewicht ──────────────────────────────────────────────────
+
+    #[test]
+    fn recency_gewicht_ist_1_fuer_taufrische_erinnerung() {
+        assert!((recency_gewicht(0.0) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn recency_gewicht_faellt_nie_unter_die_untergrenze() {
+        assert!((recency_gewicht(10_000.0) - 0.85).abs() < 0.001);
+    }
+
+    #[test]
+    fn recency_gewicht_faellt_monoton_mit_dem_alter() {
+        assert!(recency_gewicht(30.0) > recency_gewicht(90.0));
+        assert!(recency_gewicht(90.0) > recency_gewicht(180.0));
+    }
+
+    // ── Vergessen ────────────────────────────────────────────────────────
+
+    #[test]
+    fn vergessen_loescht_per_id_und_kaskadiert_das_embedding() {
+        let pfad = temp();
+        let g = Gedaechtnis::oeffnen(&pfad).unwrap();
+        g.merken(ART_FAKT, "Home Assistant läuft auf derselben Maschine", "test")
+            .unwrap();
+        let id: i64 = {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung
+                .query_row("SELECT id FROM erinnerungen", [], |r| r.get(0))
+                .unwrap()
+        };
+        // Embedding von Hand einfügen, ohne Ollama - nur um die Kaskade zu prüfen.
+        {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung
+                .execute(
+                    "INSERT INTO erinnerungen_embedding (id, embedding) VALUES (?1, ?2)",
+                    params![id, vec![0u8; 4]],
+                )
+                .unwrap();
+        }
+
+        assert!(g.vergessen(id).unwrap(), "vorhandene ID muss löschbar sein");
+        assert!(!g.vergessen(id).unwrap(), "erneutes Löschen derselben ID meldet false");
+        assert_eq!(g.anzahl().unwrap(), 0);
+
+        let verbindung = g.verbindung.lock().unwrap();
+        let embeddings_uebrig: i64 = verbindung
+            .query_row("SELECT count(*) FROM erinnerungen_embedding", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(embeddings_uebrig, 0, "PRAGMA foreign_keys=ON muss das Embedding mitlöschen");
+        drop(verbindung);
+        std::fs::remove_file(pfad).ok();
+    }
+
+    #[test]
+    fn erinnerung_suchen_findet_teiltreffer_und_ist_praezise() {
+        let pfad = temp();
+        let g = Gedaechtnis::oeffnen(&pfad).unwrap();
+        g.merken(ART_FAKT, "Der Obsidian-Vault liegt unter Documents/Hermes-Vault", "test")
+            .unwrap();
+        g.merken(ART_LEKTION, "Cargo braucht pkg-config", "test").unwrap();
+
+        let treffer = g.erinnerung_suchen("Vault").unwrap();
+        assert_eq!(treffer.len(), 1);
+        assert!(treffer[0].2.contains("Hermes-Vault"));
+
+        assert!(g.erinnerung_suchen("nichts_davon_kommt_vor").unwrap().is_empty());
+        std::fs::remove_file(pfad).ok();
     }
 }

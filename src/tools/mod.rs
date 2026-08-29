@@ -21,6 +21,7 @@ pub mod vault;
 pub mod notizbuch;
 pub mod selbstmodell;
 pub mod frage_nutzer;
+pub mod erinnerung;
 
 /// Stellt die Werkzeuge zusammen, die dem Modell angeboten werden.
 ///

@@ -128,11 +128,16 @@ fn require_api_key(var_name: &str) -> anyhow::Result<String> {
     }
 }
 
-/// Baut den HTTP-Client, den ein Anbieter benutzt.
-///
-/// Der Timeout ist der Punkt, um den es hier geht. Ohne ihn wartet Famulus
-/// endlos, wenn der Dienst die Verbindung offen lässt, ohne zu antworten -
-/// und das sieht von außen exakt aus wie ein Modell, das nachdenkt.
+/// Baut den HTTP-Client, den ein Anbieter benutzt - bewusst OHNE
+/// Gesamt-Timeout, weil beide Protokolle (`anthropic.rs`, `openai.rs`)
+/// gestreamt werden. Ein globales Zeitlimit würde genau den Fehler wieder
+/// einführen, den das Streaming behebt: eine lange Antwort stirbt nach
+/// `timeout` Sekunden, egal wie fleißig der Anbieter Tokens liefert. Der
+/// Verbindungsaufbau bleibt über `connect_timeout` begrenzt, danach übernimmt
+/// die Inaktivitäts-Wache des jeweiligen Providers (`antwort_aus_strom` in
+/// `anthropic.rs` bzw. `openai.rs`): Jedes gelesene Stück muss innerhalb
+/// derselben `timeout`-Zeit eintreffen, sonst wird abgebrochen. "Der Dienst
+/// hängt" und "die Antwort ist lang" sind damit sauber getrennt.
 ///
 /// `pool_idle_timeout` ist bewusst kurz gesetzt: reqwest hält offene
 /// Verbindungen im Pool warm, um sie für die nächste Anfrage
@@ -144,23 +149,6 @@ fn require_api_key(var_name: &str) -> anyhow::Result<String> {
 /// liegen sicher unter den Idle-Timeouts gängiger Reverse-Proxys (meist
 /// 30-60s), sodass Famulus die Verbindung von sich aus aufgibt, bevor der
 /// Server das tut.
-fn http_client(timeout: Duration) -> anyhow::Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .timeout(timeout)
-        .connect_timeout(Duration::from_secs(20))
-        .pool_idle_timeout(Duration::from_secs(15))
-        .build()?)
-}
-
-/// Wie `http_client`, aber bewusst OHNE Gesamt-Timeout - für Antworten, die
-/// gestreamt werden. Dort würde die globale Grenze genau den Fehler wieder
-/// einführen, den das Streaming behebt: eine lange Antwort stirbt nach
-/// `timeout` Sekunden, egal wie fleißig der Anbieter Tokens liefert. Der
-/// Verbindungsaufbau bleibt über `connect_timeout` begrenzt, danach übernimmt
-/// die Inaktivitäts-Wache des Providers (in `anthropic.rs::antwort_aus_strom`):
-/// Jedes gelesene Stück muss innerhalb derselben `timeout`-Zeit eintreffen,
-/// sonst wird abgebrochen. "Der Dienst hängt" und "die Antwort ist lang"
-/// sind damit sauber getrennt.
 fn http_client_ohne_gesamttimeout() -> anyhow::Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(20))

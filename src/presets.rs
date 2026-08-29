@@ -2,7 +2,7 @@
 //! denen Jens per Dropdown wechseln kann.
 //!
 //! Gespeichert in ~/.famulus/presets.toml. Existiert die Datei nicht, werden
-//! fünf sinnvolle Standard-Presets angelegt. Der aktive Prompt wird in den
+//! vier sinnvolle Standard-Presets angelegt. Der aktive Prompt wird in den
 //! System-Vorspann des Agenten eingefügt – VOR den Gedächtnis- und Vault-
 //! Anweisungen, die der Agent selbst anhängt.
 
