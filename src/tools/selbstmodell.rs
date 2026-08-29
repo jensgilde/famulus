@@ -82,8 +82,8 @@ impl Tool for SelbstmodellTool {
         text.push_str("## Meine Fähigkeiten\n\n");
         text.push_str("- Ich kann Dateien lesen, schreiben und Shell-Befehle ausführen.\n");
         text.push_str("- Ich habe Zugriff auf Jens' Obsidian-Vault als Langzeitgedächtnis.\n");
-        text.push_str("- Ich kann zwischen drei LLM-Providern wählen: Hyper, OpenRouter, Ollama.\n");
-        text.push_str("- Ich nutze lokal qwen3:14b (Ollama) und remote Claude/GPT-Modelle.\n");
+        text.push_str("- Ich kann zwischen zwei LLM-Providern wählen: Hyper, OpenRouter.\n");
+        text.push_str("- Für Chat nutze ich ausschließlich Remote-Modelle (Standard: Hyper/deepseek-v4-flash); für die semantische Gedächtnissuche läuft lokal ein Embedding-Modell über Ollama.\n");
         text.push_str("- Ich habe ein dreistufiges Gedächtnis: FTS5-Volltextsuche, ");
         text.push_str("Embedding-basierte semantische Suche und ein Notizbuch für In-Task-Lernen.\n");
         text.push_str("- Ich kann Chat-Verläufe durchsuchen und archivieren.\n");

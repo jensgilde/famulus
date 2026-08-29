@@ -1,10 +1,9 @@
 //! Anbieter, die das OpenAI-Chat-Completions-Protokoll sprechen.
 //!
-//! Also OpenAI selbst, xAI (Grok), OpenRouter und praktisch jeder lokale
-//! Server (Ollama, llama.cpp, vLLM). Vorher stand das zweimal fast wörtlich
-//! identisch in `grok.rs` und `openrouter.rs` - die Unterschiede sind
-//! Adresse, Key, Standardmodell und höchstens ein paar Zusatz-Kopfzeilen,
-//! und dafür braucht es keine zweite Datei.
+//! Also OpenAI selbst, xAI (Grok) und OpenRouter. Vorher stand das zweimal
+//! fast wörtlich identisch in `grok.rs` und `openrouter.rs` - die
+//! Unterschiede sind Adresse, Key, Standardmodell und höchstens ein paar
+//! Zusatz-Kopfzeilen, und dafür braucht es keine zweite Datei.
 //!
 //! Der Unterschied zum Anthropic-Format: Werkzeug-Aufrufe heißen hier
 //! "function calling", die Argumente kommen als JSON-*Zeichenkette* statt als
@@ -52,25 +51,6 @@ impl OpenAiProvider {
         })
     }
 
-    /// Konstruktor ohne API-Key – für lokale Server wie Ollama, die keinen
-    /// Key brauchen.
-    pub fn neu_ohne_key(
-        label: &'static str,
-        model: String,
-        base_url: String,
-        max_tokens: u32,
-        timeout: Duration,
-    ) -> Result<Self> {
-        Ok(Self {
-            api_key: String::new(),
-            model,
-            endpoint: format!("{base_url}/v1/chat/completions"),
-            label,
-            kopfzeilen: Vec::new(),
-            max_tokens,
-            client: http_client(timeout)?,
-        })
-    }
 }
 
 /// Übersetzt den Verlauf ins OpenAI-Format.
@@ -180,12 +160,7 @@ impl LlmProvider for OpenAiProvider {
         }
 
         let resp = send_mit_retry(|| {
-            let mut anfrage = self.client.post(&self.endpoint);
-            // Nur Authentifizierung anhängen, wenn ein Key gesetzt ist (Ollama
-            // braucht keinen).
-            if !self.api_key.is_empty() {
-                anfrage = anfrage.bearer_auth(&self.api_key);
-            }
+            let mut anfrage = self.client.post(&self.endpoint).bearer_auth(&self.api_key);
             for (name, wert) in &self.kopfzeilen {
                 anfrage = anfrage.header(*name, *wert);
             }

@@ -7,10 +7,9 @@
 use crate::config::Config;
 
 /// Ermittelt das aktuelle Guthaben für den in `config` eingestellten
-/// Provider. Für Ollama kommt `"lokal"` zurück - lokale Modelle kennen
-/// kein Guthabenkonzept. Fehler kommen als lesbare Meldung, nicht als
-/// Panic: Ein nicht erreichbarer Provider darf den `/status`-Befehl
-/// nicht sprengen, er meldet das Guthaben dann eben als "?".
+/// Provider. Fehler kommen als lesbare Meldung, nicht als Panic: Ein nicht
+/// erreichbarer Provider darf den `/status`-Befehl nicht sprengen, er
+/// meldet das Guthaben dann eben als "?".
 pub async fn anzeigen(config: &Config) -> Result<String, String> {
     let (url, key_var) = match config.provider.as_str() {
         "hyper" => (
@@ -34,7 +33,6 @@ pub async fn anzeigen(config: &Config) -> Result<String, String> {
                 .clone()
                 .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string()),
         ),
-        "ollama" => return Ok("lokal".to_string()),
         other => return Err(format!("Unbekannter Provider '{other}'.")),
     };
 

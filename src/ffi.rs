@@ -287,9 +287,8 @@ pub fn zustand() -> Result<String, Fehler> {
     Ok(zustand_text(&config))
 }
 
-/// Guthaben beim aktiven Provider ("lokal" bei Ollama). Nutzt die
-/// Kern-Implementierung aus credits.rs - dieselbe Logik wie der
-/// Telegram-Bot.
+/// Guthaben beim aktiven Provider. Nutzt die Kern-Implementierung aus
+/// credits.rs - dieselbe Logik wie der Telegram-Bot.
 pub fn credits() -> Result<String, Fehler> {
     let config = Config::load().map_err(|e| fehler(format!("{e:#}")))?;
     RUNTIME
@@ -322,30 +321,6 @@ pub fn aktiver_provider() -> String {
 /// Verfügbare Modelle eines Providers als JSON-Array (id-Feld), gleiche
 /// Logik und Filter wie früher gui/src/lib.rs::modelle_liste (archiviert).
 pub fn modelle_liste(provider: String) -> Result<String, Fehler> {
-    // Ollama: lokale Modelle von /api/tags (kein API-Key nötig).
-    if provider == "ollama" {
-        let body: serde_json::Value = RUNTIME
-            .block_on(async {
-                CLIENT
-                    .get("http://localhost:11434/api/tags")
-                    .send()
-                    .await
-                    .map_err(|e| format!("Ollama-Modell-Abfrage fehlgeschlagen: {e}"))?
-                    .json()
-                    .await
-                    .map_err(|e| format!("Ollama-Modell-Antwort kein JSON: {e}"))
-            })
-            .map_err(fehler_s)?;
-        let models: Vec<serde_json::Value> = body["models"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|m| serde_json::json!({"id": m["name"], "objekt": "model"}))
-            .collect();
-        return serde_json::to_string(&models).map_err(|e| fehler(format!("{e}")));
-    }
-
     let config = Config::load().map_err(|e| fehler(format!("{e:#}")))?;
 
     let (url, key_var) = match provider.as_str() {

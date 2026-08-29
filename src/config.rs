@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    pub provider: String, // "hyper", "openrouter" oder "ollama"
+    pub provider: String, // "hyper" oder "openrouter"
     #[serde(default)]
     pub model: Option<String>,
     /// Abweichende API-Adresse. Leer lassen für den echten Anbieter; gesetzt
@@ -77,7 +77,7 @@ fn default_modell_modus() -> String {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct FallbackProvider {
-    pub provider: String, // "hyper", "openrouter" oder "ollama"
+    pub provider: String, // "hyper" oder "openrouter"
     #[serde(default)]
     pub model: Option<String>,
 }

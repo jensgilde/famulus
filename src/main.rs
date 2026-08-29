@@ -7,7 +7,7 @@ use famulus_core::ui::{TerminalUi, Ui};
 use std::sync::Arc;
 
 /// Famulus - ein persönlicher KI-Agent mit vollem Rechnerzugriff und
-/// austauschbarem LLM-Backend (Charm Hyper, OpenRouter oder lokal via Ollama).
+/// austauschbarem LLM-Backend (Charm Hyper oder OpenRouter).
 #[derive(Parser)]
 #[command(name = "famulus", version)]
 struct Cli {

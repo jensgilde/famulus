@@ -11,7 +11,6 @@ was du in der Config einträgst oder vergisst.
 |---|---|---|---|
 | `hyper` | `https://hyper.charm.land` | `HYPER_API_KEY` | Anthropic Messages |
 | `openrouter` | `https://openrouter.ai/api` | `OPENROUTER_API_KEY` | OpenAI Chat Completions |
-| `ollama` | `http://localhost:11434` | kein Key noetig | OpenAI Chat Completions |
 
 Charm Hyper spricht das Anthropic-Protokoll, `openrouter` das OpenAI-Protokoll
 - deshalb reichen zwei Implementierungen (`llm/anthropic.rs`, `llm/openai.rs`).

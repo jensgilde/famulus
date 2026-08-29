@@ -76,7 +76,7 @@ struct Kopfzeile: View {
 
             // Provider-Dropdown
             Picker("", selection: $store.provider) {
-                ForEach(["hyper", "openrouter", "ollama"], id: \.self) { p in
+                ForEach(["hyper", "openrouter"], id: \.self) { p in
                     Text(p).tag(p)
                 }
             }
