@@ -1,0 +1,6 @@
+/* Registriert Deutsch als unterstützte Lokalisierung, damit macOS die
+   Standard-Menüs (Datei, Bearbeiten, Ansicht, Fenster, Hilfe) und
+   Systemtexte (Ausschneiden, Kopieren, Beenden, ...) auf Deutsch statt
+   Englisch zeigt – ohne diese Datei matcht macOS die App gegen "en",
+   auch bei deutscher Systemsprache, weil die App sonst keine
+   Lokalisierung deklariert. */
