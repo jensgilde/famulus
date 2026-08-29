@@ -178,6 +178,16 @@ fn verlauf_zu_nachrichten(json: &str) -> Vec<Message> {
 pub fn starte_auftrag(auftrag: String, verlauf_json: String, cb: Box<dyn AuftragsCallback>) {
     if let Some(alt) = LAUFENDER_AUFTRAG.lock().unwrap_or_else(|e| e.into_inner()).take() {
         alt.handle.abort();
+        // Wie in stoppe_auftrag(): ein hart abgebrochener Task sendet selbst
+        // kein Abschluss-Ereignis mehr. Ohne dieses `Abgebrochen` hier bliebe
+        // die Hülle des VORHERIGEN Auftrags für immer im Beschäftigt-Zustand
+        // (dieselbe "toter Stop-Button"-Klasse, die stoppe_auftrag löst) -
+        // der `terminiert`-Swap in TerminaleUi sorgt dafür, dass das nicht
+        // doppelt kommt, falls der alte Task sein eigenes Ereignis im
+        // selben Moment noch abgesetzt hat.
+        alt.ui.ereignis(AgentEvent::Abgebrochen {
+            fehler: "Abgebrochen (neuer Auftrag gestartet).".to_string(),
+        });
     }
 
     let (zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();

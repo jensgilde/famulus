@@ -194,12 +194,25 @@ impl LlmProvider for OpenAiProvider {
         .await
         .with_context(|| format!("Anfrage an {} fehlgeschlagen", self.endpoint))?;
 
+        // Status VOR dem JSON-Parsen prüfen: ein Fehler-Body ist nicht
+        // garantiert gültiges JSON (z.B. eine HTML-Fehlerseite eines
+        // Reverse-Proxys bei 502/503/504, oder ein leerer Body). Mit der
+        // alten Reihenfolge (erst .json(), dann Status prüfen) scheiterte
+        // `resp.json()` in genau diesem Fall zuerst - der Aufrufer bekam nur
+        // "Antwort war kein gültiges JSON" ohne Statuscode zu sehen, und
+        // `agent.rs::rufe_mit_wiederaufsetzen` konnte seinen 402-Sofort-
+        // Abbruch (kein Guthaben, nicht wiederholen) nie greifen, weil der
+        // Statuscode nie in die Fehlermeldung kam - stattdessen wurde ein
+        // aussichtsloser 402 bis zu MAX_VERSUCHE lang wiederholt.
         let status = resp.status();
-        let value: Value = resp.json().await.context("Antwort war kein gültiges JSON")?;
-
         if !status.is_success() {
+            let value: Value = resp
+                .json()
+                .await
+                .unwrap_or_else(|_| json!({"fehler": "Antwort war kein gültiges JSON"}));
             anyhow::bail!("API-Fehler von {} ({status}): {value}", self.endpoint);
         }
+        let value: Value = resp.json().await.context("Antwort war kein gültiges JSON")?;
 
         let nachricht = &value["choices"][0]["message"];
 

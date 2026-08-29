@@ -49,7 +49,15 @@ impl Tool for NotizbuchTool {
     ) -> anyhow::Result<String> {
         let inhalt = args["inhalt"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("'inhalt' fehlt"))?;
+            .ok_or_else(|| anyhow::anyhow!("'inhalt' fehlt"))?
+            .trim();
+        // `notizbuch_schreiben` speichert bei leerem/nur-Leerzeichen-Inhalt
+        // still gar nichts (siehe memory.rs) - ohne diesen Check hätte das
+        // Tool trotzdem "Notiz gespeichert" gemeldet, obwohl nichts im
+        // Notizbuch landete.
+        if inhalt.is_empty() {
+            anyhow::bail!("'inhalt' ist leer");
+        }
 
         self.gedaechtnis.notizbuch_schreiben(inhalt)?;
         Ok(format!("Notiz gespeichert: {inhalt}"))

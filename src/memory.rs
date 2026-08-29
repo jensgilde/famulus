@@ -107,6 +107,22 @@ impl Gedaechtnis {
         let verbindung = Connection::open(pfad)
             .with_context(|| format!("Gedächtnis-Datenbank {} nicht zu öffnen", pfad.display()))?;
 
+        // Mehrere unabhängige Connections zu genau dieser Datei sind der
+        // Normalfall, nicht die Ausnahme: `Agent::new` hält eine langlebige
+        // Connection für die Dauer eines Auftrags, `RouterProvider::
+        // protokollieren` (llm/router.rs) öffnet nach JEDEM einzelnen
+        // Modellaufruf - auch dem parallel gestarteten für eine
+        // Zwischenfrage, siehe agent.rs - frisch eine neue, `History::
+        // oeffnen` (history.rs) macht dasselbe pro FFI-Aufruf, und
+        // `idle_reflexion()` tut es periodisch im Hintergrund. Ohne
+        // busy_timeout ist SQLites Wartezeit bei einer gesperrten
+        // Datenbank 0ms - zwei Connections, die sich zeitlich auch nur
+        // knapp überlappen, bekommen sofort SQLITE_BUSY ("database is
+        // locked") statt kurz zu warten. Das reißt sichtbare Löcher: ein
+        // `notizbuch`-Werkzeugaufruf reicht so einen Fehler über `?` direkt
+        // als fehlgeschlagenen Tool-Call ans Modell durch.
+        verbindung.busy_timeout(std::time::Duration::from_secs(5))?;
+
         // ── Basis-Tabellen ────────────────────────────────────────────
         verbindung.execute_batch(
             "

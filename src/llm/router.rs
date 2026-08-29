@@ -32,7 +32,14 @@ impl RouterProvider {
     /// `providers` darf nicht leer sein - `build_provider` stellt das sicher,
     /// indem der Hauptprovider immer an erster Stelle steht.
     pub fn new(providers: Vec<Box<dyn LlmProvider>>) -> Self {
-        debug_assert!(!providers.is_empty(), "RouterProvider braucht mindestens einen Provider");
+        // `assert!` statt `debug_assert!`: Famulus baut Release mit
+        // `lto = "fat"`/`strip = "symbols"` (siehe Cargo.toml) - eine
+        // `debug_assert!` wird dort komplett wegoptimiert. Bekäme
+        // `providers` je doch eine leere Liste, würde das nicht hier klar
+        // gemeldet, sondern erst in `next()` über das kryptischere
+        // `letzter_fehler.expect(...)` - dann allerdings garantiert, auch
+        // im Release-Build.
+        assert!(!providers.is_empty(), "RouterProvider braucht mindestens einen Provider");
         Self { providers }
     }
 

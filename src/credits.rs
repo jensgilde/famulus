@@ -40,12 +40,26 @@ pub async fn anzeigen(config: &Config) -> Result<String, String> {
 
     let key = std::env::var(&key_var).map_err(|e| format!("{key_var} nicht gesetzt: {e}"))?;
 
-    let body: serde_json::Value = reqwest::Client::new()
+    let antwort = reqwest::Client::new()
         .get(&url)
         .bearer_auth(&key)
         .send()
         .await
-        .map_err(|e| format!("Credits-Anfrage fehlgeschlagen: {e}"))?
+        .map_err(|e| format!("Credits-Anfrage fehlgeschlagen: {e}"))?;
+
+    // Status VOR dem Auswerten prüfen: ein abgelaufener/falscher API-Key
+    // liefert oft trotzdem ein JSON-Objekt zurück (z.B. `{"error": "..."}`),
+    // nur eben ohne "balance"/"total_credits". Ohne diesen Check griffen die
+    // `.unwrap_or(0.0)`-Fallbacks unten still durch und zeigten "0" Credits -
+    // ununterscheidbar von echtem Guthabenmangel, obwohl das eigentliche
+    // Problem ein ungültiger Key oder ein Serverfehler war.
+    let status = antwort.status();
+    if !status.is_success() {
+        let text = antwort.text().await.unwrap_or_default();
+        return Err(format!("Credits-Anfrage fehlgeschlagen ({status}): {text}"));
+    }
+
+    let body: serde_json::Value = antwort
         .json()
         .await
         .map_err(|e| format!("Credits-Antwort kein JSON: {e}"))?;

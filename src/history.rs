@@ -40,6 +40,14 @@ impl History {
         let verbindung = Connection::open(pfad)
             .with_context(|| format!("History-Datenbank {} nicht zu öffnen", pfad.display()))?;
 
+        // Dieselbe Datei wie `memory::Gedaechtnis` (`gedaechtnis.db`), und
+        // `History::oeffnen` wird pro FFI-Aufruf frisch aufgerufen (siehe
+        // ffi.rs::history_db) - ohne busy_timeout liefert eine zeitgleiche
+        // Schreib-Connection (Agent-Task, Router-Protokollierung,
+        // idle_reflexion) sofort SQLITE_BUSY statt kurz zu warten. Siehe
+        // ausführliche Begründung in memory.rs::oeffnen.
+        verbindung.busy_timeout(std::time::Duration::from_secs(5))?;
+
         verbindung.execute_batch(
             "CREATE TABLE IF NOT EXISTS chats (
                 id          INTEGER PRIMARY KEY,
@@ -95,7 +103,12 @@ impl History {
 
     /// Alle nicht-archivierten Chats, neueste zuerst.
     pub fn liste(&self) -> Result<Vec<ChatEintrag>> {
-        let verbindung = self.verbindung.lock().expect("History vergiftet");
+        // Wie memory.rs::Gedaechtnis: eine vergiftete Sperre (nach einem
+        // Panic, während sie gehalten wurde) macht History nicht dauerhaft
+        // unbenutzbar - jeder weitere Aufruf über die FFI-Grenze würde
+        // sonst mit `.expect()` erneut paniken, statt den Fehler einmalig
+        // durchzureichen.
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         let mut abfrage = verbindung.prepare(
             "SELECT id, titel, nachrichten, erstellt, geaendert, archiviert
              FROM chats WHERE archiviert = 0 ORDER BY geaendert DESC",
@@ -118,7 +131,12 @@ impl History {
 
     /// Alle archivierten Chats, älteste zuerst (Archiv ist chronologisch).
     pub fn archiv_liste(&self) -> Result<Vec<ChatEintrag>> {
-        let verbindung = self.verbindung.lock().expect("History vergiftet");
+        // Wie memory.rs::Gedaechtnis: eine vergiftete Sperre (nach einem
+        // Panic, während sie gehalten wurde) macht History nicht dauerhaft
+        // unbenutzbar - jeder weitere Aufruf über die FFI-Grenze würde
+        // sonst mit `.expect()` erneut paniken, statt den Fehler einmalig
+        // durchzureichen.
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         let mut abfrage = verbindung.prepare(
             "SELECT id, titel, nachrichten, erstellt, geaendert, archiviert
              FROM chats WHERE archiviert = 1 ORDER BY erstellt ASC",
@@ -141,7 +159,12 @@ impl History {
 
     /// Durchsucht nicht-archivierte Chats nach einem Begriff (FTS5).
     pub fn suche(&self, begriff: &str) -> Result<Vec<ChatEintrag>> {
-        let verbindung = self.verbindung.lock().expect("History vergiftet");
+        // Wie memory.rs::Gedaechtnis: eine vergiftete Sperre (nach einem
+        // Panic, während sie gehalten wurde) macht History nicht dauerhaft
+        // unbenutzbar - jeder weitere Aufruf über die FFI-Grenze würde
+        // sonst mit `.expect()` erneut paniken, statt den Fehler einmalig
+        // durchzureichen.
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         // FTS5: Anführungszeichen escapen, dann in doppelte Anführungszeichen.
         let escaped = begriff.replace('"', "\"\"");
         let fts_muster = format!("\"{}\"", escaped);
@@ -170,7 +193,12 @@ impl History {
 
     /// Speichert einen neuen Chat und gibt seine ID zurück.
     pub fn speichern(&self, titel: &str, nachrichten: &str) -> Result<i64> {
-        let verbindung = self.verbindung.lock().expect("History vergiftet");
+        // Wie memory.rs::Gedaechtnis: eine vergiftete Sperre (nach einem
+        // Panic, während sie gehalten wurde) macht History nicht dauerhaft
+        // unbenutzbar - jeder weitere Aufruf über die FFI-Grenze würde
+        // sonst mit `.expect()` erneut paniken, statt den Fehler einmalig
+        // durchzureichen.
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         verbindung.execute(
             "INSERT INTO chats (titel, nachrichten) VALUES (?1, ?2)",
             (titel, nachrichten),
@@ -180,7 +208,12 @@ impl History {
 
     /// Aktualisiert einen bestehenden Chat (Titel und Nachrichten).
     pub fn aktualisieren(&self, id: i64, titel: &str, nachrichten: &str) -> Result<()> {
-        let verbindung = self.verbindung.lock().expect("History vergiftet");
+        // Wie memory.rs::Gedaechtnis: eine vergiftete Sperre (nach einem
+        // Panic, während sie gehalten wurde) macht History nicht dauerhaft
+        // unbenutzbar - jeder weitere Aufruf über die FFI-Grenze würde
+        // sonst mit `.expect()` erneut paniken, statt den Fehler einmalig
+        // durchzureichen.
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         verbindung.execute(
             "UPDATE chats SET titel = ?1, nachrichten = ?2, geaendert = datetime('now','localtime') WHERE id = ?3",
             (titel, nachrichten, id),
@@ -190,14 +223,24 @@ impl History {
 
     /// Löscht einen Chat endgültig aus der Datenbank.
     pub fn loeschen(&self, id: i64) -> Result<()> {
-        let verbindung = self.verbindung.lock().expect("History vergiftet");
+        // Wie memory.rs::Gedaechtnis: eine vergiftete Sperre (nach einem
+        // Panic, während sie gehalten wurde) macht History nicht dauerhaft
+        // unbenutzbar - jeder weitere Aufruf über die FFI-Grenze würde
+        // sonst mit `.expect()` erneut paniken, statt den Fehler einmalig
+        // durchzureichen.
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         verbindung.execute("DELETE FROM chats WHERE id = ?1", [id])?;
         Ok(())
     }
 
     /// Verschiebt einen Chat ins Archiv (oder holt ihn zurück).
     pub fn archivieren(&self, id: i64, archiviert: bool) -> Result<()> {
-        let verbindung = self.verbindung.lock().expect("History vergiftet");
+        // Wie memory.rs::Gedaechtnis: eine vergiftete Sperre (nach einem
+        // Panic, während sie gehalten wurde) macht History nicht dauerhaft
+        // unbenutzbar - jeder weitere Aufruf über die FFI-Grenze würde
+        // sonst mit `.expect()` erneut paniken, statt den Fehler einmalig
+        // durchzureichen.
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
         let wert = if archiviert { 1 } else { 0 };
         verbindung.execute(
             "UPDATE chats SET archiviert = ?1, geaendert = datetime('now','localtime') WHERE id = ?2",
