@@ -35,7 +35,6 @@ pub struct Agent {
     ui: Arc<dyn Ui>,
     gedaechtnis: Option<Arc<Gedaechtnis>>,
     max_turns: u32,
-    timeout_sekunden: u64,
     max_erinnerungen: usize,
     reflexion: bool,
     hat_vault: bool,
@@ -175,7 +174,6 @@ impl Agent {
             ui,
             gedaechtnis,
             max_turns: config.max_turns,
-            timeout_sekunden: config.timeout_sekunden,
             max_erinnerungen: config.max_erinnerungen,
             reflexion: config.reflexion,
             hat_vault,
@@ -408,23 +406,6 @@ impl Agent {
         // befolgt, eine Endlosschleife statt eines klaren Abbruchs.
         let mut wegen_ankuendigung_nachgehakt = false;
 
-        // ── Gesamt-Timeout des Auftrags ─────────────────────────────
-        // `timeout_sekunden` deckelt bisher nur einzelne Shell-Befehle und
-        // einzelne Modellanfragen - ein Deckel über den ganzen Auftrag
-        // fehlte, obwohl der Telegram-Bot während eines Auftrags seriell
-        // arbeitet (eine neue Nachricht wird erst nach diesem Auftrag
-        // gelesen). Konkret konnte ein Auftrag über max_turns=997 und
-        // langsame Modelle 30-60 Minuten stumm laufen.
-        //
-        // Bewusst KEIN tokio::time::timeout um die ganze Schleife: Das
-        // würde die Future am await-Punkt hart abbrechen und könnte einen
-        // laufenden `run_shell`-Kindprozess als Waise hinterlassen - genau
-        // das verhindert der Prozessgruppen-Kill in tools/shell.rs ja.
-        // Stattdessen prüft die Schleife selbst zwischen den Zügen, ob die
-        // Gesamtdauer überschritten ist; ein einzelner Zug (z.B. eine
-        // DVD-Konvertierung mit eigenem `timeout_seconds`-Parameter) darf
-        // die Grenze also einmal überschreiten, danach greift sie sofort.
-        let gesamt_start = std::time::Instant::now();
         self.turn_schleife(
             auftrag,
             &mut nachrichten,
@@ -433,12 +414,14 @@ impl Agent {
             &system,
             &provider,
             &mut wegen_ankuendigung_nachgehakt,
-            gesamt_start,
         )
         .await
     }
-    /// Ein kompletter Durchlauf der Turn-Schleife. In `run_task` liegt darum herum
-    /// das Gesamt-Timeout - die Schleife selbst entscheidet weiterhin über
+    /// Ein kompletter Durchlauf der Turn-Schleife. Es gibt bewusst kein
+    /// Gesamt-Timeout über den ganzen Auftrag - nur einzelne Züge
+    /// (Shell-Befehle, Modellanfragen) sind über `Config::timeout_sekunden`
+    /// gedeckelt. Ein Auftrag mit vielen Turns darf entsprechend lange
+    /// laufen; die Schleife selbst entscheidet weiterhin über
     /// Rückfragen, Werkzeug-Aufrufe, Zwischenantworten und die Reflexion.
     async fn turn_schleife(
         &self,
@@ -449,24 +432,8 @@ impl Agent {
         system: &Option<String>,
         provider: &Arc<dyn LlmProvider>,
         wegen_ankuendigung_nachgehakt: &mut bool,
-        gesamt_start: std::time::Instant,
     ) -> anyhow::Result<()> {
-        // ── Gesamt-Timeout: nach jedem einzelnen Zug neu prüfen.
-        // Siehe run_task für die Begründung, warum bewusst kein
-        // hartes tokio-Timeout um die Schleife liegt.
-        let gesamt_limit = std::time::Duration::from_secs(self.timeout_sekunden);
-
         for turn in 0..self.max_turns {
-            if gesamt_start.elapsed() > gesamt_limit {
-                self.ui.ereignis(AgentEvent::Abgebrochen {
-                    fehler: format!(
-                        "Gesamt-Timeout: Auftrag nach {}s abgebrochen (Limit: {}s).",
-                        gesamt_start.elapsed().as_secs(),
-                        self.timeout_sekunden
-                    ),
-                });
-                return Ok(());
-            }
             // Jede Runde hängt Assistant- und ToolResults-Nachrichten an -
             // bei max_turns=997 reicht ein einmaliges Kürzen vor der
             // Schleife nicht, um das Provider-Kontextlimit über einen

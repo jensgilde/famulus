@@ -87,7 +87,7 @@ fn default_antwort_tokens() -> u32 {
 }
 
 fn default_timeout() -> u64 {
-    300
+    600
 }
 
 fn default_erinnerungen() -> usize {
