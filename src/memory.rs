@@ -131,6 +131,19 @@ impl Gedaechtnis {
         // als fehlgeschlagenen Tool-Call ans Modell durch.
         verbindung.busy_timeout(std::time::Duration::from_secs(5))?;
 
+        // WAL statt delete-Journal: mehrere Connections auf dieselbe Datei
+        // ist der Normalfall, nicht die Ausnahme (Router-Logging nach jedem
+        // Modellaufruf, History pro FFI-Aufruf, idle_reflexion im
+        // Hintergrund, Agent selbst). Im delete-Journal blockiert ein
+        // schreibender Connection alle anderen komplett - bis busy_timeout
+        // greift, 5 Sekunden stille Wartezeit bei jeder Kollision. In WAL
+        // können Leser weiterhin lesen, während ein Schreiber in sein
+        // WAL-File schreibt; nur Schreiber untereinander sind gesperrt.
+        // Zusätzlich: ein Crash im delete-Journal kann die Hauptdatei
+        // in einem inkonsistenten Zustand hinterlassen (Rollback-Journal
+        // liegt noch rum), WAL ist dagegen atomar commit-bar.
+        verbindung.execute_batch("PRAGMA journal_mode = WAL;")?;
+
         // SQLite prüft Fremdschlüssel nur, wenn das PRAGMA explizit gesetzt
         // wird - ohne das kaskadiert `erinnerungen_embedding`s "ON DELETE
         // CASCADE" (siehe Stufe 2 unten) trotz korrekt deklariertem Schema
@@ -353,16 +366,66 @@ impl Gedaechtnis {
         // siehe praeferenz_limit(). `gesehen` bekommt trotzdem ALLE
         // Präferenzen, damit eine dadurch ausgeschlossene Präferenz nicht
         // über den Keyword-Fallback unten nochmal als "Fakt" reinrutscht.
-        let alle_praefs = verbindung
-            .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC LIMIT ?2")?
-            .query_map(params![ART_PRAEFERENZ, PRAEFERENZ_LADE_DECKEL], |zeile| {
-                Ok(Erinnerung {
-                    art: zeile.get(0)?,
-                    inhalt: zeile.get(1)?,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect::<Vec<_>>();
+        // Sortierung: FTS5-Match auf den Auftragstext zuerst (relevante
+        // Präferenzen steigen nach oben), Recency als Tiebreaker. Ohne
+        // FTS-Tabelle fällt es auf Recency zurück.
+        let suchbegriffe: Vec<String> = worte(auftrag)
+            .into_iter()
+            .map(|w| format!("\"{}\"", w.replace('"', "")))
+            .collect();
+        let fts_ok = verbindung
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='erinnerungen_fts'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0) > 0;
+        let alle_praefs = if fts_ok && !suchbegriffe.is_empty() {
+            // Präferenzen, die auf den Auftrag matchen, zuerst - dann
+            // die restlichen, beide Gruppen jeweils nach Recency.
+            let query = suchbegriffe.join(" OR ");
+            let mut matching: Vec<Erinnerung> = verbindung
+                .prepare(
+                    "SELECT e.art, e.inhalt
+                     FROM erinnerungen e
+                     JOIN erinnerungen_fts f ON e.id = f.rowid
+                     WHERE erinnerungen_fts MATCH ?1 AND e.art = ?2
+                     ORDER BY bm25(erinnerungen_fts)"
+                )?
+                .query_map(params![query, ART_PRAEFERENZ], |zeile| {
+                    Ok(Erinnerung {
+                        art: zeile.get(0)?,
+                        inhalt: zeile.get(1)?,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            let mut rest: Vec<Erinnerung> = verbindung
+                .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC LIMIT ?2")?
+                .query_map(params![ART_PRAEFERENZ, PRAEFERENZ_LADE_DECKEL], |zeile| {
+                    Ok(Erinnerung {
+                        art: zeile.get(0)?,
+                        inhalt: zeile.get(1)?,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            let gesehen_matching: std::collections::HashSet<String> = matching.iter().map(|e| e.inhalt.clone()).collect();
+            rest.retain(|e| !gesehen_matching.contains(&e.inhalt));
+            matching.append(&mut rest);
+            matching
+        } else {
+            verbindung
+                .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC LIMIT ?2")?
+                .query_map(params![ART_PRAEFERENZ, PRAEFERENZ_LADE_DECKEL], |zeile| {
+                    Ok(Erinnerung {
+                        art: zeile.get(0)?,
+                        inhalt: zeile.get(1)?,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect::<Vec<_>>()
+        };
 
         let mut gesehen: std::collections::HashSet<String> = alle_praefs
             .iter()
@@ -629,21 +692,78 @@ impl Gedaechtnis {
         let mut gesehen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut ergebnis: Vec<Erinnerung> = {
             let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
-            let gefunden: Vec<Erinnerung> = verbindung
-                .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC LIMIT ?2")?
-                .query_map(params![ART_PRAEFERENZ, PRAEFERENZ_LADE_DECKEL], |zeile| {
-                    Ok(Erinnerung {
-                        art: zeile.get(0)?,
-                        inhalt: zeile.get(1)?,
-                    })
-                })?
-                .filter_map(|r| {
-                    if let Ok(ref e) = r {
-                        gesehen.insert(e.inhalt.clone());
-                    }
-                    r.ok()
-                })
+            // Präferenzen: FTS5-Match auf den Auftragstext zuerst
+            // (relevante steigen nach oben), Recency als Tiebreaker.
+            let suchbegriffe: Vec<String> = worte(auftrag)
+                .into_iter()
+                .map(|w| format!("\"{}\"", w.replace('"', "")))
                 .collect();
+            let fts_ok = verbindung
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='erinnerungen_fts'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0) > 0;
+            let gefunden: Vec<Erinnerung> = if fts_ok && !suchbegriffe.is_empty() {
+                let query = suchbegriffe.join(" OR ");
+                let mut matching: Vec<Erinnerung> = verbindung
+                    .prepare(
+                        "SELECT e.art, e.inhalt
+                         FROM erinnerungen e
+                         JOIN erinnerungen_fts f ON e.id = f.rowid
+                         WHERE erinnerungen_fts MATCH ?1 AND e.art = ?2
+                         ORDER BY bm25(erinnerungen_fts)"
+                    )?
+                    .query_map(params![query, ART_PRAEFERENZ], |zeile| {
+                        Ok(Erinnerung {
+                            art: zeile.get(0)?,
+                            inhalt: zeile.get(1)?,
+                        })
+                    })?
+                    .filter_map(|r| {
+                        if let Ok(ref e) = r {
+                            gesehen.insert(e.inhalt.clone());
+                        }
+                        r.ok()
+                    })
+                    .collect();
+                let gesehen_matching: std::collections::HashSet<String> = matching.iter().map(|e| e.inhalt.clone()).collect();
+                let mut rest: Vec<Erinnerung> = verbindung
+                    .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC LIMIT ?2")?
+                    .query_map(params![ART_PRAEFERENZ, PRAEFERENZ_LADE_DECKEL], |zeile| {
+                        Ok(Erinnerung {
+                            art: zeile.get(0)?,
+                            inhalt: zeile.get(1)?,
+                        })
+                    })?
+                    .filter_map(|r| {
+                        if let Ok(ref e) = r {
+                            gesehen.insert(e.inhalt.clone());
+                        }
+                        r.ok()
+                    })
+                    .filter(|e| !gesehen_matching.contains(&e.inhalt))
+                    .collect();
+                matching.append(&mut rest);
+                matching
+            } else {
+                verbindung
+                    .prepare("SELECT art, inhalt FROM erinnerungen WHERE art = ?1 ORDER BY id DESC LIMIT ?2")?
+                    .query_map(params![ART_PRAEFERENZ, PRAEFERENZ_LADE_DECKEL], |zeile| {
+                        Ok(Erinnerung {
+                            art: zeile.get(0)?,
+                            inhalt: zeile.get(1)?,
+                        })
+                    })?
+                    .filter_map(|r| {
+                        if let Ok(ref e) = r {
+                            gesehen.insert(e.inhalt.clone());
+                        }
+                        r.ok()
+                    })
+                    .collect()
+            };
             gefunden.into_iter().take(praeferenz_limit(hoechstens)).collect()
         };
 

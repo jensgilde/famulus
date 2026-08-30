@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.1.0] – 2026-08-28
+
+### Behoben
+- **SQLite-Journal auf WAL umgestellt**: `PRAGMA journal_mode = WAL` statt
+  `delete`. Bei den vielen parallelen Connections auf `gedaechtnis.db`
+  (Router-Logging nach jedem Modellaufruf, History pro FFI-Aufruf,
+  `idle_reflexion` im Hintergrund, Agent selbst) blockierte im
+  delete-Journal ein schreibender Connection alle anderen komplett -
+  bis `busy_timeout` (5s) griff. WAL lässt Leser weiterlesen, während
+  ein Schreiber in sein WAL-File schreibt; nur Schreiber untereinander
+  sind gesperrt. Zusätzlich: Crash-Sicherheit - im delete-Journal kann
+  ein Absturz die Hauptdatei inkonsistent hinterlassen (Rollback-Journal
+  liegt noch rum), WAL ist atomar commit-bar.
+- **Stille Kontextkürzung sichtbar gemacht**: Wenn `nachrichten_kuerzen`
+  ältere Nachrichten aus dem Kontext wirft, wird jetzt eine Hinweis-
+  Nachricht in den Verlauf eingefügt ("X frühere Nachrichten wurden
+  entfernt"). Vorher referenzierte das Modell stolz Dinge, die es nicht
+  mehr sehen konnte - Jens bekam "Stimmt, das hatten wir schon"-Antworten
+  auf nie gesagte Inhalte.
+- **Notizbuch-Verlust bei fehlgeschlagener Konsolidierung**: Das
+  Notizbuch wurde immer geleert, auch wenn der Konsolidierungs-LLM-Call
+  fehlschlug oder unparsebares JSON lieferte. Jetzt wird erst geleert,
+  wenn mindestens eine Erinnerung tatsächlich übernommen wurde.
+- **Präferenzen: Relevanz statt reine Recency**: Bei 326 gespeicherten
+  Präferenzen und einem Budget von 12 (Sub-Deckel 6) bekam Jens nur die
+  6 jüngsten Präferenzen - egal ob sie zum Auftrag passten. Jetzt werden
+  Präferenzen per FTS5-Match auf den Auftragstext vorsortiert (relevante
+  zuerst), Recency als Tiebreaker. In `relevante()` UND `relevante_semantisch()`.
+- **Reflexion bei Trivial-Aufträgen übersprungen**: "Wie spät ist es?"
+  kostete zwei zusätzliche LLM-Calls (Notizbuch-Konsolidierung +
+  Rückblick) für nichts Merkbares. Jetzt greift `ist_einfacher_auftrag`
+  auch hier.
+
 ## [1.0.0] – 2026-08-28
 
 ### Neu

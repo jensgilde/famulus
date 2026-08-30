@@ -583,7 +583,11 @@ impl Agent {
                 self.ui.ereignis(AgentEvent::Fertig);
 
                 // ── Rückblick + Notizbuch-Konsolidierung (Stufe 3) ──
-                if self.reflexion {
+                // Trivial-Aufträge (einfache Fragen, kurze Befehle) überspringen
+                // die Reflexion: die kostet zwei zusätzliche LLM-Calls
+                // (Notizbuch-Konsolidierung + Rückblick) und liefert bei
+                // "Wie spät ist es?" nichts Merkbares.
+                if self.reflexion && !ist_einfacher_auftrag(auftrag) {
                     self.reflektieren(auftrag, turn + 1).await;
                 }
                 return Ok(());
@@ -627,6 +631,7 @@ impl Agent {
             let tool_defs = Vec::new();
             let nachrichten = vec![Message::User(prompt)];
 
+            let mut uebernommen = 0usize;
             if let Ok(antwort) = self.provider.next(None, &nachrichten, &tool_defs).await {
                 if let Some(json) = json_herausschneiden(&antwort.text) {
                     if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json) {
@@ -637,6 +642,7 @@ impl Agent {
                             );
                                 let inhalt = eintrag["inhalt"].as_str().unwrap_or("");
                                 if g.merken_und_einbetten(art, inhalt, "notizbuch").await.unwrap_or(false) {
+                                    uebernommen += 1;
                                     self.ui.ereignis(AgentEvent::Gemmerkt {
                                         kategorie: art.to_string(),
                                         inhalt: inhalt.to_string(),
@@ -648,8 +654,13 @@ impl Agent {
                 }
             }
 
-            // Notizbuch leeren nach erfolgreicher Konsolidierung.
-            let _ = g.notizbuch_leeren();
+            // Notizbuch erst leeren, wenn die Konsolidierung mindestens
+            // eine Erinnerung übernommen hat - sonst gehen Notizen bei
+            // fehlgeschlagenem LLM-Call oder unparsebarem JSON verloren.
+            // Lieber nochmal konsolidieren als verlieren.
+            if uebernommen > 0 {
+                let _ = g.notizbuch_leeren();
+            }
         }
 
         // ── Klassischer Rückblick auf den Auftrag selbst ──
@@ -805,6 +816,10 @@ fn kuerzen(text: &str, hoechstens: usize) -> String {
 
 /// Kürzt Nachrichten, wenn sie das Kontextlimit überschreiten.
 /// Behält den System-Prompt (erste Nachricht) und die letzten Nachrichten.
+/// Fügt nach dem Kürzen eine Hinweis-Nachricht ein, damit das Modell weiß,
+/// dass es früheren Kontext verloren hat - sonst referenziert es stolz
+/// Sachen, die es nicht mehr sehen kann, und Jens bekommt "Stimmt, das
+/// hatten wir schon"-Antworten auf Dinge, die nie gesagt wurden.
 fn nachrichten_kuerzen(nachrichten: &mut Vec<Message>) {
     let gesamt: usize = nachrichten.iter().map(|m| format!("{m:?}").len()).sum();
     if gesamt <= MAX_KONTEXT_ZEICHEN {
@@ -826,6 +841,12 @@ fn nachrichten_kuerzen(nachrichten: &mut Vec<Message>) {
     if gekuerzt > 0 && system.is_some() {
         *nachrichten = {
             let mut v = vec![system.expect("System-Prompt muss da sein, wenn wir kürzen")];
+            // Hinweis in den Verlauf, damit das Modell nicht referenziert,
+            // was es nicht mehr sehen kann.
+            v.push(Message::User(format!(
+                "[Hinweis: {} frühere Nachrichten wurden aus Platzgründen aus dem Kontext entfernt - behandle den Auftrag ab hier als frischen Start]",
+                gekuerzt
+            )));
             v.extend(nachrichten.drain(keep_idx..));
             v
         };
