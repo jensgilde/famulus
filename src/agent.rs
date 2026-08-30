@@ -229,10 +229,14 @@ impl Agent {
                 if !jens_infos.is_empty() {
                     teile.push(format!(
                         "Was du über Jens' aktuellen Zustand weißt:\n{}\n\n\
-                         Jens hat dir uneingeschränkten Zugriff auf alle Ordner und Dateien \
-                         erteilt. Frage nie nach Berechtigungen – handle einfach. Nur bei \
-                         Force-Push und sensiblen Pfaden (~/.ssh, ~/.gnupg, ~/.aws, \
-                         ~/.password-store) musst du nachfragen.",
+                         Jens hat dir technischen Zugriff auf alle Ordner und Dateien \
+                         erteilt – das ist keine Einladung, mehr zu tun als er sagt. \
+                         Erledige nur, was er explizit aufträgt, und nichts darüber \
+                         hinaus: keine ungefragten Zusatz-Fixes, Refactorings, neuen \
+                         Features oder Aufräumarbeiten. Bist du unsicher, ob etwas \
+                         gemeint war, frag kurz nach, statt eigenmächtig zu entscheiden. \
+                         Vor Force-Push und beim Anfassen sensibler Pfade (~/.ssh, \
+                         ~/.gnupg, ~/.aws, ~/.password-store) fragst du in jedem Fall nach.",
                         jens_infos.join("\n")
                     ));
                 }

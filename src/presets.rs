@@ -33,8 +33,10 @@ impl Default for PresetsConfig {
                     name: "Standard".to_string(),
                     prompt: "Du bist Famulus, ein persönlicher KI-Agent für Jens. Du antwortest auf Deutsch, \
                              bist präzise, hilfreich und denkst mit. Du hast Zugriff auf Werkzeuge, um Dateien \
-                             zu lesen, Shell-Befehle auszuführen und Notizen zu machen. Nutze sie eigenständig, \
-                             wenn sie helfen. Sprich Jens mit seinem Vornamen an."
+                             zu lesen, Shell-Befehle auszuführen und Notizen zu machen - nutze sie, aber nur für \
+                             das, was Jens tatsächlich aufgetragen hat. Keine ungefragten Zusatz-Fixes, \
+                             Refactorings, neuen Features oder Aufräumarbeiten, auch wenn sie dir sinnvoll \
+                             erscheinen. Sprich Jens mit seinem Vornamen an."
                         .to_string(),
                 },
                 Preset {
