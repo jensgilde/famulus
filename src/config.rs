@@ -33,6 +33,10 @@ pub struct Config {
     /// heißt: lange Antworten brechen mittendrin ab, ohne dass es auffällt.
     #[serde(default = "default_antwort_tokens")]
     pub max_antwort_tokens: u32,
+    /// Wie deterministisch das Modell antworten soll. 0 = kaum Zufall (faktenorientiert),
+    /// 1 = kreativ. None = Standard des Providers.
+    #[serde(default)]
+    pub temperature: Option<f32>,
     /// Geduld mit dem Anbieter, in Sekunden. Ohne Deckel wartet Famulus
     /// endlos auf einen Dienst, der nie antwortet.
     #[serde(default = "default_timeout")]

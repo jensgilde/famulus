@@ -256,6 +256,7 @@ mod tests {
             model: None,
             base_url: None,
             api_key_env: None,
+            temperature: None,
             fallback_providers: Vec::new(),
             max_turns: 20,
             max_antwort_tokens: 16_000,

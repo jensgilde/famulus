@@ -504,7 +504,24 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
             let lauf_ergebnis = loop {
                 tokio::select! {
                     biased;
-                    ergebnis = &mut lauf => break ergebnis,
+                    ergebnis = &mut lauf => {
+                        // `lauf` kann seine letzten Events (z.B. den finalen
+                        // Text) und die Fertigstellung im selben Poll
+                        // auslösen - durch `biased` gewinnt dieser Zweig dann,
+                        // OHNE dass `reset_rx.recv()` noch drankäme, und die
+                        // bereits im Kanal wartenden Events gingen sonst beim
+                        // Verlassen der Schleife verloren (sichtbar als leere
+                        // Antwort / "(keine Antwort)"). Deshalb hier vor dem
+                        // Verlassen noch alles nicht-blockierend abholen.
+                        while let Ok(ereignis) = reset_rx.try_recv() {
+                            match ereignis {
+                                AgentEvent::Text { chunk } => assembled.push_str(&chunk),
+                                AgentEvent::Abgebrochen { fehler } => abbruch = Some(fehler),
+                                _ => {}
+                            }
+                        }
+                        break ergebnis;
+                    }
                     ereignis = reset_rx.recv() => {
                         match ereignis {
                             Some(AgentEvent::Text { chunk }) => assembled.push_str(&chunk),
@@ -591,7 +608,41 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                 // Zwischenfrage an einen schon beendeten Agenten geschickt
                 // (die wäre verloren), sondern nach dem Auftrag normal
                 // verarbeitet.
-                ergebnis = &mut lauf => break ergebnis,
+                ergebnis = &mut lauf => {
+                    // `lauf` kann seine letzten Events (insbesondere den
+                    // finalen Text) und die Fertigstellung im selben Poll
+                    // auslösen - durch `biased` gewinnt dieser Zweig dann,
+                    // OHNE dass `rx.recv()` noch drankäme, und der bereits im
+                    // Kanal wartende Text ginge beim Verlassen der Schleife
+                    // verloren (sichtbar als "(keine Antwort)" in Telegram,
+                    // obwohl das Modell längst geantwortet hatte). Deshalb
+                    // hier vor dem Verlassen noch alles nicht-blockierend
+                    // abholen.
+                    while let Ok(ereignis) = rx.try_recv() {
+                        match ereignis {
+                            AgentEvent::Text { chunk } => assembled.push_str(&chunk),
+                            AgentEvent::ToolStart { name, args } => {
+                                let vorschau: String = args.to_string().chars().take(200).collect();
+                                let _ = send_message(&client, &cfg.token, chat_id, &format!("⚙ {name}({vorschau})")).await;
+                            }
+                            AgentEvent::Abgebrochen { fehler } => abbruch = Some(fehler),
+                            AgentEvent::ZwischenfrageAntwort { frage, text } => {
+                                let _ = send_message(&client, &cfg.token, chat_id, &format!("↩ Zu \"{frage}\": {text}")).await;
+                            }
+                            AgentEvent::Warte { grund, sekunden, versuch, max_versuche } => {
+                                let grund: String = grund.chars().take(300).collect();
+                                let _ = send_message(&client, &cfg.token, chat_id, &format!("⏳ Fehlgeschlagen ({versuch}/{max_versuche}), versuche in {sekunden}s erneut: {grund}")).await;
+                            }
+                            AgentEvent::FrageAnNutzer { frage, optionen } => {
+                                if let Err(e) = send_message_mit_optionen(&client, &cfg.token, chat_id, &frage, &optionen).await {
+                                    eprintln!("[telegram] Rückfrage senden fehlgeschlagen: {e:#}");
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    break ergebnis;
+                }
                 ereignis = rx.recv() => {
                     match ereignis {
                         Some(AgentEvent::Text { chunk }) => assembled.push_str(&chunk),

@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 pub struct OpenAiProvider {
+    temperature: Option<f32>,
     api_key: String,
     model: String,
     endpoint: String,
@@ -39,6 +40,7 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn neu(
+        temperature: Option<f32>,
         label: &'static str,
         model: String,
         base_url: String,
@@ -56,6 +58,7 @@ impl OpenAiProvider {
             max_tokens,
             client: http_client_ohne_gesamttimeout()?,
             pause_limit: timeout,
+            temperature,
         })
     }
 
@@ -166,6 +169,10 @@ impl LlmProvider for OpenAiProvider {
         });
         if !openai_tools.is_empty() {
             body["tools"] = json!(openai_tools);
+        }
+
+        if let Some(t) = self.temperature {
+            body["temperature"] = json!(t);
         }
 
         let resp = send_mit_retry(|| {

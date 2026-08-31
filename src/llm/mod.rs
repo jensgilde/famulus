@@ -197,6 +197,7 @@ fn build_single_provider(
     modell: Option<String>,
     basis_url: Option<String>,
     key_var: Option<String>,
+    temperature: Option<f32>,
     max_tokens: u32,
     timeout: Duration,
 ) -> anyhow::Result<Box<dyn LlmProvider>> {
@@ -207,6 +208,7 @@ fn build_single_provider(
         // dafür ist das LlmProvider-Trait da: ein neuer Anbieter kostet hier
         // sechs Zeilen statt einer eigenen Datei.
         "hyper" => Ok(Box::new(anthropic::AnthropicProvider::neu(
+            temperature,
             "hyper",
             modell.unwrap_or_else(|| "deepseek-v4-flash".to_string()),
             basis(basis_url, "https://hyper.charm.land"),
@@ -216,6 +218,7 @@ fn build_single_provider(
         )?)),
 
         "openrouter" => Ok(Box::new(openai::OpenAiProvider::neu(
+            temperature,
             "openrouter",
             modell.unwrap_or_else(|| "openai/gpt-4o".to_string()),
             basis(basis_url, "https://openrouter.ai/api"),
@@ -252,6 +255,7 @@ pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn 
         config.model.clone(),
         config.base_url.clone(),
         config.api_key_env.clone(),
+        config.temperature,
         max_tokens,
         timeout,
     )?;
@@ -263,6 +267,7 @@ pub fn build_provider(config: &crate::config::Config) -> anyhow::Result<Box<dyn 
             fallback.model.clone(),
             None,
             None,
+            config.temperature,
             max_tokens,
             timeout,
         )?);
@@ -286,6 +291,7 @@ pub fn build_guenstiges_modell(config: &crate::config::Config) -> anyhow::Result
         guenstig.model.clone(),
         None,
         None,
+        config.temperature,
         config.max_antwort_tokens,
         timeout,
     )?;

@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 pub struct AnthropicProvider {
+    temperature: Option<f32>,
     api_key: String,
     model: String,
     endpoint: String,
@@ -31,6 +32,7 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn neu(
+        temperature: Option<f32>,
         label: &'static str,
         model: String,
         base_url: String,
@@ -46,6 +48,7 @@ impl AnthropicProvider {
             max_tokens,
             client: http_client_ohne_gesamttimeout()?,
             pause_limit: timeout,
+            temperature,
         })
     }
 }
@@ -169,6 +172,10 @@ impl LlmProvider for AnthropicProvider {
 
         if !anthropic_tools.is_empty() {
             body["tools"] = json!(anthropic_tools);
+        }
+
+        if let Some(t) = self.temperature {
+            body["temperature"] = json!(t);
         }
 
         // Der Vorspann steht vor dem Gespräch und ändert sich während eines
