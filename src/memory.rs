@@ -614,6 +614,15 @@ impl Gedaechtnis {
             .context("Ollama-Embedding-API nicht erreichbar")?;
 
         let body: Value = resp.json().await.context("Ungültige Embedding-Antwort")?;
+        // Ollama antwortet bei Problemen (Modell nicht installiert, falscher
+        // Name, ...) mit HTTP 200 und einem {"error": "..."}-Body statt eines
+        // Embeddings - ohne diese Prüfung landete die eigentliche Ursache nie
+        // im Log, nur das nichtssagende "Kein 'embedding'-Feld in Antwort"
+        // (siehe Gedächtnis-Review 2026-09-01: das Modell fehlte schlicht,
+        // aber das war aus der alten Fehlermeldung nicht ersichtlich).
+        if let Some(fehler) = body["error"].as_str() {
+            anyhow::bail!("Ollama meldet: {fehler}");
+        }
         let embedding: Vec<f32> = body["embedding"]
             .as_array()
             .context("Kein 'embedding'-Feld in Antwort")?
@@ -676,7 +685,11 @@ impl Gedaechtnis {
         }
     }
 
-    /// Semantische Suche via Cosine Similarity auf Embedding-Vektoren.
+    /// Hybride Suche: Cosine-Similarity auf Embedding-Vektoren fusioniert
+    /// per Reciprocal Rank Fusion mit FTS5/BM25-Keyword-Suche (siehe
+    /// Kommentar bei `RRF_K` weiter unten für die Begründung). Bei nicht
+    /// erreichbarem Ollama fällt die gesamte Funktion auf `relevante()`
+    /// (reine FTS5-Suche) zurück.
     pub async fn relevante_semantisch(
         &self,
         auftrag: &str,
@@ -776,29 +789,43 @@ impl Gedaechtnis {
             }
         };
 
-        // 3. Alle gespeicherten Embeddings laden und vergleichen.
-        let mut bewertet: Vec<(f32, Erinnerung)> = {
+        // 3. Zwei unabhängige Rankings für den Rest (keine Präferenzen):
+        // Cosine-Similarity nach Bedeutung und FTS5/BM25 nach wörtlicher
+        // Übereinstimmung. Vorher hat die semantische Suche, sobald
+        // Embeddings verfügbar waren, die Keyword-Suche komplett verdrängt
+        // (nur beim Ausfall von Ollama griff `relevante()` als Fallback) -
+        // beide Methoden haben aber blinde Flecken, die sich nicht
+        // überschneiden: FTS5 findet nur wörtliche Treffer und übersieht
+        // sinngemäße Formulierungen, Embeddings können bei kurzen oder
+        // generischen Anfragen danebenliegen. Reciprocal Rank Fusion (RRF)
+        // kombiniert beide Rankings über ihre Ränge statt ihre Rohwerte -
+        // die sind nicht direkt vergleichbar (Cosine liegt zwischen -1 und
+        // 1, BM25 ist unbeschränkt) - und braucht dafür keine Normierung.
+        // Ein Treffer, den beide Methoden weit oben sehen, gewinnt; ein
+        // Treffer nur einer Methode bleibt trotzdem im Rennen (siehe
+        // Gedächtnis-Review 2026-09-01).
+        const RRF_K: f32 = 60.0;
+
+        let semantisch_rang: Vec<Erinnerung> = {
             let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = verbindung.prepare(
-                "SELECT e.id, e.art, e.inhalt, em.embedding,
+                "SELECT e.art, e.inhalt, em.embedding,
                         julianday('now') - julianday(e.erstellt) AS alter_tage
                  FROM erinnerungen e
                  JOIN erinnerungen_embedding em ON e.id = em.id
                  WHERE e.art != ?1",
             )?;
-
-            let gefunden: Vec<(f32, Erinnerung)> = stmt
+            let mut bewertet: Vec<(f32, Erinnerung)> = stmt
                 .query_map(params![ART_PRAEFERENZ], |zeile| {
-                    let id: i64 = zeile.get(0)?;
-                    let art: String = zeile.get(1)?;
-                    let inhalt: String = zeile.get(2)?;
-                    let bytes: Vec<u8> = zeile.get(3)?;
-                    let alter_tage: f64 = zeile.get(4).unwrap_or(0.0);
-                    Ok((id, art, inhalt, bytes, alter_tage))
+                    let art: String = zeile.get(0)?;
+                    let inhalt: String = zeile.get(1)?;
+                    let bytes: Vec<u8> = zeile.get(2)?;
+                    let alter_tage: f64 = zeile.get(3).unwrap_or(0.0);
+                    Ok((art, inhalt, bytes, alter_tage))
                 })?
                 .filter_map(|r| r.ok())
-                .filter(|(_, _, inhalt, _, _)| gesehen.insert(inhalt.clone()))
-                .map(|(_, art, inhalt, bytes, alter_tage)| {
+                .filter(|(_, inhalt, _, _)| !gesehen.contains(inhalt))
+                .map(|(art, inhalt, bytes, alter_tage)| {
                     let emb: Vec<f32> = bytes
                         .chunks_exact(4)
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -807,13 +834,58 @@ impl Gedaechtnis {
                     (score, Erinnerung { art, inhalt })
                 })
                 .collect();
-            gefunden
+            bewertet.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            bewertet.into_iter().map(|(_, e)| e).collect()
         };
 
-        // 4. Nach Ähnlichkeit sortieren (höchste zuerst).
-        bewertet.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let fts_rang: Vec<Erinnerung> = {
+            let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
+            let suchbegriffe: Vec<String> = worte(auftrag)
+                .into_iter()
+                .map(|w| format!("\"{}\"", w.replace('"', "")))
+                .collect();
+            if suchbegriffe.is_empty() {
+                Vec::new()
+            } else {
+                let query = suchbegriffe.join(" OR ");
+                verbindung
+                    .prepare(
+                        "SELECT e.art, e.inhalt
+                         FROM erinnerungen e
+                         JOIN erinnerungen_fts f ON e.id = f.rowid
+                         WHERE erinnerungen_fts MATCH ?1 AND e.art != ?2
+                         ORDER BY bm25(erinnerungen_fts)",
+                    )?
+                    .query_map(params![query, ART_PRAEFERENZ], |zeile| {
+                        Ok(Erinnerung {
+                            art: zeile.get(0)?,
+                            inhalt: zeile.get(1)?,
+                        })
+                    })?
+                    .filter_map(|r| r.ok())
+                    .filter(|e| !gesehen.contains(&e.inhalt))
+                    .collect()
+            }
+        };
 
-        for (_, e) in bewertet {
+        let mut rrf: std::collections::HashMap<String, (f32, Erinnerung)> =
+            std::collections::HashMap::new();
+        for (rang, e) in semantisch_rang.into_iter().enumerate() {
+            let inhalt = e.inhalt.clone();
+            let eintrag = rrf.entry(inhalt).or_insert_with(|| (0.0, e));
+            eintrag.0 += 1.0 / (RRF_K + rang as f32 + 1.0);
+        }
+        for (rang, e) in fts_rang.into_iter().enumerate() {
+            let inhalt = e.inhalt.clone();
+            let eintrag = rrf.entry(inhalt).or_insert_with(|| (0.0, e));
+            eintrag.0 += 1.0 / (RRF_K + rang as f32 + 1.0);
+        }
+
+        // 4. Nach fusioniertem Rang sortieren (höchste zuerst).
+        let mut fusioniert: Vec<(f32, Erinnerung)> = rrf.into_values().collect();
+        fusioniert.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (_, e) in fusioniert {
             if ergebnis.len() >= hoechstens {
                 break;
             }

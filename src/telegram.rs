@@ -331,7 +331,17 @@ async fn status_text() -> String {
         .await
         .unwrap_or_else(|e| format!("Fehler ({})", e));
 
-    format!("🤖 Modell: {modell}\n💰 Credits: {credits}")
+    // Ob die semantische Gedächtnissuche (Ollama-Embeddings) gerade läuft,
+    // stand bisher nirgends sichtbar - eine wochenlange stille Degradierung
+    // auf reine Keyword-Suche wäre sonst nie aufgefallen (siehe
+    // Gedächtnis-Review 2026-09-01).
+    let embeddings = if crate::memory::Gedaechtnis::embeddings_verfuegbar().await {
+        "an (semantische Suche aktiv)"
+    } else {
+        "aus (nur Keyword-Suche - Ollama/Embedding-Modell nicht erreichbar)"
+    };
+
+    format!("🤖 Modell: {modell}\n💰 Credits: {credits}\n🧠 Embeddings: {embeddings}")
 }
 
 /// Baut einen frischen Agenten (wie die GUI pro Auftrag) und fährt ihn mit
