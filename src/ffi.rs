@@ -309,6 +309,19 @@ pub fn credits_fuer_provider(provider: String) -> Result<String, Fehler> {
         .map_err(fehler_s)
 }
 
+/// Ob die semantische Gedächtnissuche (Ollama-Embeddings) gerade läuft,
+/// oder auf reine Keyword-Suche zurückgefallen ist - dieselbe Prüfung wie
+/// beim Telegram-Bot (`telegram.rs::status_text`), damit die Swift-App
+/// nicht die einzige Oberfläche ohne diese Sichtbarkeit bleibt (siehe
+/// Gedächtnis-Review 2026-09-01).
+pub fn embeddings_status() -> String {
+    if RUNTIME.block_on(crate::memory::Gedaechtnis::embeddings_verfuegbar()) {
+        "Embeddings: an".to_string()
+    } else {
+        "Embeddings: aus".to_string()
+    }
+}
+
 /// Der in der Config (famulus.toml) gespeicherte Provider.
 /// Braucht die Swift-Hülle, um beim Start das Dropdown korrekt zu
 /// initialisieren und die passenden Credits anzuzeigen.

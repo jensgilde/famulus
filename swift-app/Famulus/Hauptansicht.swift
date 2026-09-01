@@ -150,7 +150,7 @@ struct ChatSidebar: View {
                             aktiv: index == store.aktiverChatIndex,
                             wahl: { store.chatWählen(index) },
                             loeschen: { store.chatLöschen(index) },
-                            archivieren: { store.chatArchivieren(index, archiviert: true) })
+                            archivieren: { name in store.chatArchivieren(index, archiviert: true, neuerTitel: name) })
                     }
                 }
                 .padding(8)
@@ -215,9 +215,12 @@ struct ChatZeile: View {
     let aktiv: Bool
     let wahl: () -> Void
     let loeschen: () -> Void
-    let archivieren: () -> Void
+    let archivieren: (String) -> Void
     @State private var hover = false
     @State private var zeigeLoeschenBestaetigung = false
+    @State private var zeigeArchivDialog = false
+    // Vorbelegt mit dem aktuellen Namen - Feld leer lassen = Namen behalten.
+    @State private var archivName = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -233,7 +236,9 @@ struct ChatZeile: View {
             // längst konnte.
             if hover {
                 HStack(spacing: 4) {
-                    Button(action: archivieren) {
+                    Button {
+                        starteArchivieren()
+                    } label: {
                         Image(systemName: "archivebox")
                             .font(.system(size: 11))
                             .foregroundStyle(Marke.textLeise)
@@ -272,7 +277,7 @@ struct ChatZeile: View {
             withAnimation(.easeInOut(duration: 0.15)) { hover = istDrüber }
         }
         .contextMenu {
-            Button("Archivieren", action: archivieren)
+            Button("Archivieren", action: starteArchivieren)
             Button("Löschen", role: .destructive) { zeigeLoeschenBestaetigung = true }
         }
         .alert("Chat löschen?", isPresented: $zeigeLoeschenBestaetigung) {
@@ -281,6 +286,19 @@ struct ChatZeile: View {
         } message: {
             Text("„\(chat.titel)“ wird unwiderruflich gelöscht.")
         }
+        .alert("Unter welchem Namen archivieren?", isPresented: $zeigeArchivDialog) {
+            TextField("Name", text: $archivName)
+            Button("Abbrechen", role: .cancel) {}
+            Button("Archivieren") { archivieren(archivName) }
+        } message: {
+            Text("Feld leer lassen, um den aktuellen Namen „\(chat.titel)“ beizubehalten.")
+        }
+    }
+
+    /// Öffnet den Archiv-Dialog, vorbelegt mit dem aktuellen Chat-Namen.
+    private func starteArchivieren() {
+        archivName = chat.titel
+        zeigeArchivDialog = true
     }
 }
 
@@ -477,6 +495,8 @@ struct ChatBereich: View {
             }
             Spacer()
             Text(store.zustandText)
+                .foregroundStyle(Marke.textSekundär)
+            Text(store.embeddingsText)
                 .foregroundStyle(Marke.textSekundär)
             Text(store.creditsText)
                 .foregroundStyle(Marke.erfolg)

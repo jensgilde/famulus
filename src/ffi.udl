@@ -16,6 +16,7 @@ namespace famulus {
   [Throws=Fehler] string credits();
   [Throws=Fehler] string credits_fuer_provider(string provider);
   string aktiver_provider();
+  string embeddings_status();
   [Throws=Fehler] string modelle_liste(string provider);
   [Throws=Fehler] string setze_modell(string provider, string model);
   [Throws=Fehler] string setze_modell_modus(string modus);

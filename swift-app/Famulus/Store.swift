@@ -98,6 +98,7 @@ final class FamulusStore {
     var status = "Bereit"
     var zustandText = ""
     var creditsText = ""
+    var embeddingsText = ""
 
     // Modell-Auswahl
     var provider = "hyper"
@@ -123,6 +124,7 @@ final class FamulusStore {
         // Provider aus Config holen, damit Dropdown und Credits stimmen
         provider = aktiverProvider()
         aktualisiereCredits()
+        aktualisiereEmbeddingsStatus()
         ladeModelle()
         if chats.isEmpty { neuerChat() }
         starteIdleReflexion()
@@ -172,10 +174,24 @@ final class FamulusStore {
         if chats.isEmpty { neuerChat() }
     }
 
-    func chatArchivieren(_ index: Int, archiviert: Bool) {
+    func chatArchivieren(_ index: Int, archiviert: Bool, neuerTitel: String? = nil) {
         guard chats.indices.contains(index) else { return }
-        let c = chats[index]
+        var c = chats[index]
         if let id = c.sqliteId {
+            // Optionaler Umbenennen beim Archivieren: Absicht, den Chat unter
+            // einem anderen Namen abzulegen. Das Titel-UPDATE läuft über
+            // `speichern` (→ historyAktualisieren), bevor das Archiv-Flag
+            // gesetzt wird – so zieht auch der FTS5-Index den neuen Namen
+            // nach und der Chat bleibt im Archiv unter dem neuen Titel
+            // auffindbar. Leer/nicht verändert = Namen beibehalten.
+            if archiviert, let neu = neuerTitel,
+               !neu.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let bereinigt = neu.trimmingCharacters(in: .whitespacesAndNewlines)
+                if bereinigt != c.titel {
+                    c.titel = bereinigt
+                    _ = speichern(chat: c)
+                }
+            }
             try? historyArchivieren(id: id, archiviert: archiviert)
             chats.remove(at: index)
             if archiviert { archiv.insert(c, at: 0) }
@@ -548,6 +564,16 @@ final class FamulusStore {
         Task {
             let neu = await Task.detached { (try? creditsFuerProvider(provider: p)) ?? "" }.value
             creditsText = neu
+        }
+    }
+
+    /// Ob die semantische Gedächtnissuche gerade läuft oder auf reine
+    /// Keyword-Suche zurückgefallen ist - bisher nur im Telegram-Bot
+    /// sichtbar (siehe Gedächtnis-Review 2026-09-01).
+    private func aktualisiereEmbeddingsStatus() {
+        Task {
+            let neu = await Task.detached { embeddingsStatus() }.value
+            embeddingsText = neu
         }
     }
 
