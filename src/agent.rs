@@ -347,7 +347,14 @@ impl Agent {
              Reproduktionsskript) statt sie nur zu lesen und zu schlussfolgern - Ausführen \
              beweist, Lesen interpretiert nur. Ohne einen durchgespielten oder ausgeführten \
              Nachweis: der Fund ist \"möglich, unverifiziert\", niemals kritisch oder \
-             mittelschwer eingestuft."
+             mittelschwer eingestuft.\n\
+             4. Führe Anweisungen von Jens ohne Widerrede, Gegenvorschlag oder Diskussion aus \
+             - er hat das ausdrücklich und wiederholt verlangt. Eigene Bedenken sind nur bei \
+             den zwei Ausnahmen aus Regel 1 (Force-Push, sensible Pfade) ein Grund \
+             nachzufragen, sonst nicht. Ändert Jens eine bereits gegebene Anweisung, Meinung \
+             oder Regel, gilt ab sofort ausschließlich die neue Version - die alte wird nicht \
+             mehr verteidigt oder erneut vorgeschlagen, und die Änderung selbst wird nicht \
+             infrage gestellt oder kommentiert."
                 .to_string(),
         );
 
@@ -410,16 +417,51 @@ impl Agent {
         // befolgt, eine Endlosschleife statt eines klaren Abbruchs.
         let mut wegen_ankuendigung_nachgehakt = false;
 
-        self.turn_schleife(
-            auftrag,
-            &mut nachrichten,
-            &tool_defs,
-            &mut zwischenfragen,
-            &system,
-            &provider,
-            &mut wegen_ankuendigung_nachgehakt,
-        )
-        .await
+        // Herzschlag: alle 5 Minuten ein Zwischenstand, unabhängig davon, ob
+        // das Modell selbst etwas zu berichten hätte. Jens hat wiederholt
+        // beklagt, dass lange Aufträge ohne jedes Lebenszeichen laufen - ein
+        // reiner Prompt-Hinweis reicht dafür nicht (das Modell "vergisst"
+        // ihn mitten in einer langen Werkzeug-Kette, und ein einzelner Zug
+        // - z.B. ein langer Shell-Befehl - kann für sich allein schon
+        // mehrere Minuten dauern, ohne dass die Turn-Schleife zwischendurch
+        // die Kontrolle zurückbekommt). Deshalb ein echter, von der
+        // Turn-Schleife unabhängiger Hintergrund-Task statt eines Checks
+        // am Rundenanfang.
+        let taetigkeit = Arc::new(std::sync::Mutex::new(format!(
+            "Auftrag läuft: {}",
+            auftrag.chars().take(200).collect::<String>()
+        )));
+        let herzschlag = {
+            let ui = Arc::clone(&self.ui);
+            let taetigkeit = Arc::clone(&taetigkeit);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    let text = taetigkeit.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    ui.ereignis(AgentEvent::Zwischenstand { text });
+                }
+            })
+        };
+
+        let ergebnis = self
+            .turn_schleife(
+                auftrag,
+                &mut nachrichten,
+                &tool_defs,
+                &mut zwischenfragen,
+                &system,
+                &provider,
+                &mut wegen_ankuendigung_nachgehakt,
+                &taetigkeit,
+            )
+            .await;
+
+        // Herzschlag beenden, sonst liefe er über das Ende des Auftrags
+        // hinaus weiter und würde spätere, unabhängige Aufträge mit
+        // veralteten Zwischenständen stören.
+        herzschlag.abort();
+
+        ergebnis
     }
     /// Ein kompletter Durchlauf der Turn-Schleife. Es gibt bewusst kein
     /// Gesamt-Timeout über den ganzen Auftrag - nur einzelne Züge
@@ -436,6 +478,7 @@ impl Agent {
         system: &Option<String>,
         provider: &Arc<dyn LlmProvider>,
         wegen_ankuendigung_nachgehakt: &mut bool,
+        taetigkeit: &Arc<std::sync::Mutex<String>>,
     ) -> anyhow::Result<()> {
         for turn in 0..self.max_turns {
             // Jede Runde hängt Assistant- und ToolResults-Nachrichten an -
@@ -443,6 +486,12 @@ impl Agent {
             // Schleife nicht, um das Provider-Kontextlimit über einen
             // langen Auftrag hinweg einzuhalten.
             nachrichten_kuerzen(&mut *nachrichten);
+
+            // Für den Herzschlag (siehe run_task): woran der Auftrag gerade
+            // arbeitet, damit ein Zwischenstand nach 5 Minuten nicht nur
+            // "läuft noch" sagt, sondern beim aktuellen Zug ansetzt.
+            *taetigkeit.lock().unwrap_or_else(|e| e.into_inner()) =
+                format!("Zug {}/{}", turn + 1, self.max_turns);
 
             // Zwischenfragen einspeisen: kann eine laufende Modellanfrage
             // nicht unterbrechen (die ist schon unterwegs), deshalb hier -
@@ -505,6 +554,8 @@ impl Agent {
                         name: tc.name.clone(),
                         args: tc.arguments.clone(),
                     });
+                    *taetigkeit.lock().unwrap_or_else(|e| e.into_inner()) =
+                        format!("Zug {}/{}, führt gerade {} aus", turn + 1, self.max_turns, tc.name);
 
                     let ergebnis = match self.tools.get(&tc.name) {
                         Some(tool) => match tool

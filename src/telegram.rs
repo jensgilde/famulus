@@ -638,6 +638,9 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                                     eprintln!("[telegram] Rückfrage senden fehlgeschlagen: {e:#}");
                                 }
                             }
+                            AgentEvent::Zwischenstand { text } => {
+                                let _ = send_message(&client, &cfg.token, chat_id, &format!("◷ Zwischenstand: {text}")).await;
+                            }
                             _ => {}
                         }
                     }
@@ -662,6 +665,9 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                             if let Err(e) = send_message_mit_optionen(&client, &cfg.token, chat_id, &frage, &optionen).await {
                                 eprintln!("[telegram] Rückfrage senden fehlgeschlagen: {e:#}");
                             }
+                        }
+                        Some(AgentEvent::Zwischenstand { text }) => {
+                            let _ = send_message(&client, &cfg.token, chat_id, &format!("◷ Zwischenstand: {text}")).await;
                         }
                         Some(_) => {}
                         None => {}

@@ -37,6 +37,12 @@ pub enum AgentEvent {
     /// dieses Ereignis zurück, sondern als ganz normale, neue Nachricht -
     /// siehe `tools/frage_nutzer.rs`.
     FrageAnNutzer { frage: String, optionen: Vec<String> },
+    /// Zwischenstand während eines laufenden Auftrags - fest verdrahteter
+    /// Herzschlag alle 5 Minuten (siehe `agent.rs::run_task`), unabhängig
+    /// davon, ob das Modell selbst etwas zu berichten hätte. Jens hat
+    /// wiederholt beklagt, dass lange Aufträge ohne jedes Lebenszeichen
+    /// laufen - ein reiner Prompt-Hinweis reichte dafür nicht.
+    Zwischenstand { text: String },
     /// Der Auftrag ist fertig (finale Antwort wurde schon via Text gesendet).
     Fertig,
     /// Der Auftrag ist abgebrochen (Fehler oder Limit erreicht).
@@ -102,6 +108,9 @@ impl Ui for TerminalUi {
                 for (i, option) in optionen.iter().enumerate() {
                     println!("{}", format!("     {}. {option}", i + 1).cyan());
                 }
+            }
+            AgentEvent::Zwischenstand { text } => {
+                println!("{}", format!("  ◷ Zwischenstand: {text}").dimmed());
             }
             AgentEvent::Fertig => {
                 println!("\n{}", "✔ Fertig".green().bold());
@@ -184,6 +193,12 @@ mod tests {
                     optionen: vec!["klein".into(), "groß".into()],
                 },
                 "frage_an_nutzer",
+            ),
+            (
+                AgentEvent::Zwischenstand {
+                    text: "läuft noch".into(),
+                },
+                "zwischenstand",
             ),
             (AgentEvent::Fertig, "fertig"),
             (
