@@ -237,7 +237,15 @@ async fn antwort_aus_strom(
     let mut namen: HashMap<u64, String> = HashMap::new();
     let mut json_fragmente: HashMap<u64, String> = HashMap::new();
 
-    let mut puffer = String::new();
+    // Rohe Bytes, nicht String - siehe die ausführliche Begründung bei
+    // `anthropic.rs::antwort_aus_strom`: ein Chunk endet an einer
+    // Netzwerkgrenze, nicht an einer Zeichengrenze. Jedes Chunk einzeln mit
+    // `from_utf8_lossy` zu dekodieren zerstört ein mehrbytiges Zeichen
+    // (ä/ö/ü/ß im Deutschen der Normalfall), das genau auf der Grenze
+    // zweier Chunks geteilt wird, unwiderruflich in zwei Ersatzzeichen -
+    // dekodiert wird deshalb erst, wenn ein vollständiges SSE-Ereignis
+    // beisammen ist.
+    let mut puffer: Vec<u8> = Vec::new();
 
     loop {
         let stueck = match tokio::time::timeout(pause_limit, strom.next()).await {
@@ -247,18 +255,25 @@ async fn antwort_aus_strom(
             Err(_) => anyhow::bail!("keine Daten mehr vom Anbieter innerhalb der Wartezeit"),
         };
 
-        puffer.push_str(&String::from_utf8_lossy(&stueck));
+        puffer.extend_from_slice(&stueck);
 
         // SSE-Trenner ist eine Leerzeile; ein Ereignis kann über mehrere
         // Netzpakete verteilt sein, deshalb erst verarbeiten, wenn es ganz da ist.
-        while let Some(trenn) = puffer.find("\n\n") {
-            let ereignis = puffer[..trenn].to_string();
-            puffer = puffer[trenn + 2..].to_string();
+        while let Some(trenn) = finde_doppeltes_newline(&puffer) {
+            let ereignis = String::from_utf8_lossy(&puffer[..trenn]).into_owned();
+            puffer.drain(..trenn + 2);
             if verarbeite_sse(&ereignis, &mut text_teile, &mut ids, &mut namen, &mut json_fragmente)? {
                 return fertig_bauen(text_teile, ids, namen, json_fragmente);
             }
         }
     }
+}
+
+/// Sucht "\n\n" auf Byte-Ebene statt über eine (bereits dekodierte)
+/// Zeichenkette - der Puffer ist hier bewusst noch rohes UTF-8, siehe
+/// `antwort_aus_strom`.
+fn finde_doppeltes_newline(puffer: &[u8]) -> Option<usize> {
+    puffer.windows(2).position(|w| w == b"\n\n")
 }
 
 /// Baut aus den gesammelten Stücken die fertige Antwort - aufgerufen, sobald
@@ -378,6 +393,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(antwort.text, "X");
+    }
+
+    /// Regressionstest für den Byte/Zeichen-Bug, siehe die ausführliche
+    /// Begründung bei `anthropic.rs`s gleichnamigem Test: "ä" ist eine
+    /// Zwei-Byte-UTF-8-Folge (0xC3 0xA4), der Chunk wird bewusst genau
+    /// dazwischen zerschnitten - wie es eine echte Netzwerkgrenze jederzeit
+    /// tun kann.
+    #[tokio::test]
+    async fn mehrbytiges_zeichen_ueber_chunk_grenze_bleibt_intakt() {
+        let voll = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"später\"}}]}\n\ndata: [DONE]\n\n";
+        let bytes = voll.as_bytes();
+        let schnitt = bytes.iter().position(|&b| b == 0xC3).expect("'ä' im Text") + 1;
+        let teil1 = bytes::Bytes::copy_from_slice(&bytes[..schnitt]);
+        let teil2 = bytes::Bytes::copy_from_slice(&bytes[schnitt..]);
+        let strom = futures_util::stream::iter(vec![Ok(teil1), Ok(teil2)]);
+
+        let antwort = antwort_aus_strom(strom, Duration::from_secs(5)).await.unwrap();
+        assert_eq!(antwort.text, "später");
     }
 
     #[tokio::test]
