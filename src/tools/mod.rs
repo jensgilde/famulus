@@ -22,6 +22,7 @@ pub mod notizbuch;
 pub mod selbstmodell;
 pub mod frage_nutzer;
 pub mod erinnerung;
+pub mod web_request;
 
 /// Stellt die Werkzeuge zusammen, die dem Modell angeboten werden.
 ///
@@ -33,6 +34,12 @@ pub fn all_tools(config: &crate::config::Config) -> Vec<Box<dyn Tool>> {
         Box::new(fs::ReadFileTool),
         Box::new(fs::WriteFileTool),
         Box::new(shell::ShellTool),
+        // Web-Tool: HTTP-GET/POST mit Cookie-Session für externe Dienste.
+        Box::new(web_request::WebRequestTool::new(
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".famulus"),
+        )),
     ];
 
     if let Some(wurzel) = config.vault_pfad() {
