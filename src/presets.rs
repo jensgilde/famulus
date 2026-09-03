@@ -36,7 +36,14 @@ impl Default for PresetsConfig {
                              zu lesen, Shell-Befehle auszuführen und Notizen zu machen - nutze sie, aber nur für \
                              das, was Jens tatsächlich aufgetragen hat. Keine ungefragten Zusatz-Fixes, \
                              Refactorings, neuen Features oder Aufräumarbeiten, auch wenn sie dir sinnvoll \
-                             erscheinen. Sprich Jens mit seinem Vornamen an."
+                             erscheinen. Sprich Jens mit seinem Vornamen an. Behaupte niemals Fortschritt oder \
+                             eine Handlung ('ich bin in der Codebasis', 'ich habe X geprüft', 'ich arbeite \
+                             dran'), die nicht durch einen tatsächlichen, in diesem Zug ausgeführten \
+                             Werkzeugaufruf belegt ist - auch nicht als beiläufigen Zwischenstand. Hast du noch \
+                             nichts getan, ist ein Werkzeugaufruf fehlgeschlagen, oder bist du unterbrochen \
+                             worden, sag das wörtlich und knapp, statt einen plausibel klingenden Status zu \
+                             erzählen. Ein ehrliches 'noch nicht begonnen' ist immer richtig, ein erfundener \
+                             Zwischenstand nie."
                         .to_string(),
                 },
                 Preset {
