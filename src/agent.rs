@@ -609,23 +609,30 @@ impl Agent {
                     tool_calls: antwort.tool_calls,
                 });
                 nachrichten.push(Message::ToolResults(ergebnisse));
-            } else if !*wegen_ankuendigung_nachgehakt && ist_ankuendigung_ohne_ausfuehrung(&antwort.text) {
-                // Text sagt "mache ich jetzt" oder "soll ich das umsetzen?",
-                // aber es kam kein Werkzeugaufruf - genau das Muster hinter
-                // "kündigt an, macht aber nichts". Statt das als fertig zu
-                // werten, einmal nachhaken und dem Modell die Chance geben,
-                // die Ankündigung im selben Auftrag tatsächlich einzulösen.
+            } else if !*wegen_ankuendigung_nachgehakt
+                && (antwort.text.trim().is_empty() || ist_ankuendigung_ohne_ausfuehrung(&antwort.text))
+            {
+                // Zwei Fälle, gleiche Behandlung: entweder sagt der Text
+                // "mache ich jetzt"/"soll ich das umsetzen?" (Ankündigung
+                // ohne Ausführung), oder die Antwort ist schlicht LEER (ein
+                // bekannter, gelegentlicher Provider-/Streaming-Aussetzer).
+                // Beides landete vorher fälschlich im "Fertig"-Zweig unten -
+                // bei einer leeren Antwort sogar mit einer unsichtbaren,
+                // leeren Chat-Nachricht als einzigem Lebenszeichen. Statt das
+                // als fertig zu werten, einmal nachhaken und dem Modell die
+                // Chance geben, im selben Auftrag tatsächlich zu liefern.
                 *wegen_ankuendigung_nachgehakt = true;
                 nachrichten.push(Message::Assistant {
                     text: antwort.text,
                     tool_calls: Vec::new(),
                 });
                 nachrichten.push(Message::User(
-                    "Du hast angekündigt, etwas zu tun, oder gefragt, ob du es tun sollst - \
-                     aber keinen Werkzeugaufruf gemacht. Führ es jetzt in diesem Zug \
-                     tatsächlich mit den passenden Werkzeugen aus, oder erklär konkret, \
-                     woran es hakt. Frag nicht erneut nach, außer es geht um Force-Push \
-                     oder einen sensiblen Pfad."
+                    "Deine letzte Antwort kam ohne Werkzeugaufruf und ohne klaren Abschluss \
+                     (leer oder nur eine Ankündigung/Rückfrage). Führ den nächsten Schritt \
+                     jetzt in diesem Zug tatsächlich mit den passenden Werkzeugen aus, oder \
+                     erklär konkret und abschließend, woran es hakt bzw. was das Ergebnis \
+                     ist. Frag nicht erneut nach, außer es geht um Force-Push oder einen \
+                     sensiblen Pfad."
                         .to_string(),
                 ));
             } else {
@@ -918,6 +925,13 @@ fn nachrichten_kuerzen(nachrichten: &mut Vec<Message>) {
 /// Ankündigung, die als Abschluss durchgeht - ungefangen zu lassen.
 fn ist_ankuendigung_ohne_ausfuehrung(text: &str) -> bool {
     let t = text.to_lowercase();
+
+    // Direkte Ankündigungs-/Rückfrage-Phrasen. War vorher eine kurze,
+    // starre Liste - traf reale Formulierungen wie "Los geht's", "ich
+    // beginne mit...", "ich committe..." NICHT, weil keine davon exakt in
+    // der Liste stand. Deutlich erweitert, aber jede feste Liste bleibt
+    // prinzipiell unvollständig - deshalb zusätzlich die generischeren
+    // Muster unten (Verb-Ankündigung, Vertagung).
     const MUSTER: &[&str] = &[
         "setze ich um",
         "setze ich das um",
@@ -925,6 +939,8 @@ fn ist_ankuendigung_ohne_ausfuehrung(text: &str) -> bool {
         "mache ich jetzt",
         "mache ich gleich",
         "mache ich direkt",
+        "mach ich jetzt",
+        "mach ich gleich",
         "werde ich jetzt",
         "werde ich gleich",
         "werde ich direkt",
@@ -939,8 +955,55 @@ fn ist_ankuendigung_ohne_ausfuehrung(text: &str) -> bool {
         "soll ich es machen",
         "darf ich das umsetzen",
         "darf ich das machen",
+        "los geht's",
+        "los geht es",
+        "ich beginne",
+        "ich fange jetzt an",
+        "ich fange gleich an",
+        "fange ich an",
+        "ich starte",
+        "starte ich",
+        "ich lege los",
+        "lege ich los",
+        "ich committe",
+        "committe ich",
+        "ich erstelle jetzt",
+        "ich schreibe jetzt",
+        "ich baue jetzt",
+        "ich prüfe jetzt",
+        "ich schaue mir das jetzt an",
+        "ich sehe mir das jetzt an",
+        "ich gehe das jetzt an",
+        "als nächstes werde ich",
+        "ich mach mich jetzt",
+        "mache mich jetzt an die arbeit",
     ];
-    MUSTER.iter().any(|m| t.contains(m))
+    if MUSTER.iter().any(|m| t.contains(m)) {
+        return true;
+    }
+
+    // Vertagung: das Modell verspricht einen SPÄTEREN Bericht ("ich melde
+    // mich", "Ergebnis folgt") statt im selben Zug zu handeln. Dieses
+    // Muster ist unabhängig von der genauen Ankündigungs-Formulierung -
+    // ein Zug, der mit einem Werkzeugaufruf endet, braucht kein
+    // Versprechen für "später", weil die Turn-Schleife danach ja
+    // ohnehin weiterläuft. Wer "ich melde mich" schreibt, OHNE in
+    // diesem Zug etwas ausgeführt zu haben, hat nichts angestoßen, das
+    // je zurückmelden könnte.
+    const VERTAGUNGS_MUSTER: &[&str] = &[
+        "ich melde mich",
+        "melde mich mit ergebnis",
+        "melde mich, sobald",
+        "melde mich sobald",
+        "berichte dann",
+        "gebe dann bescheid",
+        "gebe ich bescheid",
+        "sage ich bescheid",
+        "sag dir dann bescheid",
+        "ergebnis folgt",
+        "folgt in kürze",
+    ];
+    VERTAGUNGS_MUSTER.iter().any(|m| t.contains(m))
 }
 
 /// Regelbasierte Einschätzung, ob ein Auftrag ohne das Premium-Modell
@@ -1020,6 +1083,15 @@ mod tests {
             "Mache ich jetzt.",
             "Soll ich das umsetzen?",
             "Klar, kümmere mich jetzt darum.",
+            // Realer Vorfall (2026-09-04): keins der alten Muster traf,
+            // der Auftrag wurde fälschlich als "Fertig" gewertet, obwohl
+            // weder committet noch getaggt wurde.
+            "Los geht's - ich committe die offenen Änderungen und setze \
+             darüber den Versions-Sprung auf `1.2.0` samt CHANGELOG und Tag.",
+            "Ich beginne mit der Anhebung in `Cargo.toml`.",
+            "Los geht's – ich melde mich mit Ergebnis, sobald Commit + Tag gesetzt sind.",
+            "Ich starte jetzt mit der Analyse.",
+            "Als nächstes werde ich die Datei anlegen.",
         ];
         for fall in faelle {
             assert!(ist_ankuendigung_ohne_ausfuehrung(fall), "sollte erkannt werden: {fall}");
@@ -1032,6 +1104,11 @@ mod tests {
             "Fertig - die Datei ist angelegt und der Test läuft grün.",
             "Ich habe den Bug in Zeile 42 gefixt.",
             "Das kann ich nicht automatisch prüfen, ohne einen Netzwerkaufruf zu machen.",
+            // Neue Muster dürfen nicht auf harmlose Formulierungen anschlagen,
+            // die zufällig ähnliche Wörter enthalten wie die neuen Muster.
+            "Der Server startet automatisch neu, sobald der Dienst hängt.",
+            "Ich habe den Report bereits geschrieben, hier ist er.",
+            "Ich berichte dir jetzt die Ergebnisse: Alles lief sauber durch.",
         ];
         for fall in faelle {
             assert!(!ist_ankuendigung_ohne_ausfuehrung(fall), "sollte NICHT erkannt werden: {fall}");
