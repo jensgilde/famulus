@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.2.0] – 2026-09-05
+
+### Neu
+- **Scroll-zu-unten / Chat letzter Eintrag**: Beim Öffnen der App und beim Wechsel in einen bestehenden Chat springt die Ansicht jetzt zuverlässig zum neuesten (untersten) Eintrag – gestaffelte Scroll-Auslösung, damit die Position auch bei asynchron geladenen Chats sicher unten landet.
+- **Sichtbarer Aktivitäts-Indikator**: Ein rotierender Cursor/„Denkt…"-Text neben den Chat-Nachrichten zeigt an, wenn der Agent gerade einen Auftrag verarbeitet (gekoppelt an den echten Arbeitszustand des Stores), plus Abbrechen-Schaltfläche laufender Arbeitsläufe.
+- **Famulus denkt von selbst**: Wecker-System (launchd) mit drei Ebenen – Kicktipp-Check/-Tippen (Mo+Mi 08:00, täglich 20:00), wöchentliche Mail-Aufräumaktion (So 07:00, auf den Famulus-Hub-Mail-Zweig umgebogen), monatlicher Vault-Cleanup (1. des Monats 06:00) und handlungsfähige Idle-Reflexion, die bei fälligen Aufgaben proaktiv aktiv wird.
+- **Anruf-Skript** (`scripts/anrufen.sh`): auf Befehl sichtbar die Telefon-App mit einer Nummer öffnen (nur manuell, keine Automatik).
+
+### Geändert
+- **Icons aller Famulus-Apps im Phoenix-Stil**: Motive statt der bisherigen 2-Buchstaben-Monogramme (Famulus=KI-Geist, Games=Gamecontroller, Music=Achtelnote, Downloader=Download-Pfeil, Files=Ordner, Mail=Umschlag) – Anthrazit-Verlauf, runde Ecken, #f97316, Rendering über gemeinsame Icon-Basis.
+- **Mail-Wecker auf Famulus Hub umgebogen**: Sonntags-Aufräumauftrag zeigt jetzt auf den Mail-Zweig des Famulus Hub statt auf das gelöschte eigenständige Famulus-Mail-Projekt.
+
+### Behoben
+- **IMAP/SMTP-Empfang hing**: `receiveMessage` lieferte bei TLS-Verbindungen keine eingehenden Daten; auf `receive()` umgestellt (per Wegwerf-Test gegen echten Server bewiesen).
+
+
 ## [1.1.0] – 2026-08-28
 
 ### Behoben

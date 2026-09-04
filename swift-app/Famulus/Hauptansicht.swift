@@ -349,14 +349,25 @@ struct ChatBereich: View {
                             LiveBlock(store: store)
                                 .id("live")
                         }
+                        // Unsichtbarer Anker am Ende: scrollt IMMER nach unten,
+                        // auch wenn weder Nachrichten noch LiveBlock existieren.
+                        Color.clear
+                            .frame(height: 0.5)
+                            .id("unten")
                     }
                     .padding(20)
                 }
+                .onAppear {
+                    scrollZumEnde(proxy)
+                }
+                .onChange(of: store.aktiverChatIndex) { _, _ in
+                    scrollZumEnde(proxy)
+                }
                 .onChange(of: store.denktText) { _, _ in
-                    withAnimation { proxy.scrollTo("live", anchor: .bottom) }
+                    withAnimation { proxy.scrollTo("unten", anchor: .bottom) }
                 }
                 .onChange(of: store.aktiverChat.nachrichten.count) { _, _ in
-                    withAnimation { proxy.scrollTo("live", anchor: .bottom) }
+                    withAnimation { proxy.scrollTo("unten", anchor: .bottom) }
                 }
             }
 
@@ -367,6 +378,22 @@ struct ChatBereich: View {
         }
     }
 
+
+    func scrollZumEnde(_ proxy: ScrollViewProxy) {
+        // Gestaffelte Versuche: Die LazyVStack-Kinder werden nach dem Laden /
+        // Chat-Wechsel erst nach und nach gerendert. Ein einzelner Versuch
+        // (früher: einmal 0,05 s) findet den "unten"-Anker sonst nicht und man
+        // bleibt oben bzw. in der Mitte hängen. Mehrmals gestaffelt greift der
+        // Scroll zuverlässig, auch wenn der neue Chat asynchron geladen wird.
+        let verzögerungen: [Double] = [0.05, 0.25, 0.6, 1.2]
+        for (i, v) in verzögerungen.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + v) {
+                withAnimation(.easeOut(duration: 0.1)) {
+                    proxy.scrollTo("unten", anchor: .bottom)
+                }
+            }
+        }
+    }
     // ── Eingabezeile ──
     private var eingabeZeile: some View {
         VStack(spacing: 6) {
@@ -416,6 +443,21 @@ struct ChatBereich: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Marke.rand, lineWidth: 1))
 
                 if store.beschaeftigt {
+                    // Sichtbarer Aktivitäts-Hinweis: Jens sieht sofort, dass
+                    // Famulus arbeitet (und nicht "hängt"/vergessen hat). Der
+                    // rotierende Kreis + der gerade Gedanke von `denktText`
+                    // sind an den echten Store-Zustand gekoppelt.
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(Marke.akzent)
+                        Text(store.denktText.isEmpty ? "arbeitet…" : store.denktText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Marke.akzent)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 8)
+
                     // Stoppt den laufenden Auftrag. Der Kern emittiert danach
                     // selbst `Abgebrochen` (ffi.rs::stoppe_auftrag), sodass der
                     // Chat-Bereich zuverlässig aus dem Beschäftigt-Zustand kommt.
