@@ -334,6 +334,19 @@ pub fn aktiver_provider() -> String {
 /// Verfügbare Modelle eines Providers als JSON-Array (id-Feld), gleiche
 /// Logik und Filter wie früher gui/src/lib.rs::modelle_liste (archiviert).
 pub fn modelle_liste(provider: String) -> Result<String, Fehler> {
+    // Sync-Pfad (FFI/GUI): blockiert auf der Async-Variante.
+    // Der Telegram-Bot ruft bewusst modelle_liste_async direkt auf - siehe dort.
+    RUNTIME.block_on(modelle_liste_async(provider))
+}
+
+/// Async-Variante von `modelle_liste` für den Telegram-Bot. Dort läuft der
+/// Polling-Loop bereits in einer tokio-Runtime, und ein `RUNTIME.block_on`
+/// (wie in der Sync-Variante) würde mit "Cannot start a runtime from within
+/// a runtime" panicken (Live-Log, 2026-09-05) - der /modell-Klick tat dann
+/// scheinbar "gar nichts". Diese Funktion hat keinen block_on mehr und lässt
+/// sich im Bot per `await` aufrufen. Die Logik & Filter sind identisch mit
+/// `modelle_liste`.
+pub async fn modelle_liste_async(provider: String) -> Result<String, Fehler> {
     let config = Config::load().map_err(|e| fehler(format!("{e:#}")))?;
 
     let (url, key_var) = match provider.as_str() {
@@ -364,19 +377,15 @@ pub fn modelle_liste(provider: String) -> Result<String, Fehler> {
     let key = std::env::var(&key_var)
         .map_err(|e| fehler(format!("{key_var} nicht gesetzt: {e}")))?;
 
-    let body: serde_json::Value = RUNTIME
-        .block_on(async {
-            CLIENT
-                .get(&url)
-                .bearer_auth(&key)
-                .send()
-                .await
-                .map_err(|e| format!("Modell-Abfrage fehlgeschlagen: {e}"))?
-                .json()
-                .await
-                .map_err(|e| format!("Modell-Antwort kein JSON: {e}"))
-        })
-        .map_err(fehler_s)?;
+    let body: serde_json::Value = CLIENT
+        .get(&url)
+        .bearer_auth(&key)
+        .send()
+        .await
+        .map_err(|e| fehler(format!("Modell-Abfrage fehlgeschlagen: {e}")))?
+        .json()
+        .await
+        .map_err(|e| fehler(format!("Modell-Antwort kein JSON: {e}")))?;
 
     let raw = match provider.as_str() {
         "hyper" => body["data"].clone(),

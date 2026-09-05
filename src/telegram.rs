@@ -536,7 +536,7 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                                 // alte Vorwahl.
                                 *GEWAEHLTER_PROVIDER.lock().unwrap_or_else(|e| e.into_inner()) = Some(provider.clone());
                                 let _ = send_message(&poll_client, &poll_token, chat_id, &format!("⚙️ Provider **{provider}** gewählt – lade Modelle …")).await;
-                                let modelle_json = match crate::modelle_liste(provider.clone()) {
+                                let modelle_json = match crate::modelle_liste_async(provider.clone()).await {
                                     Ok(j) => j,
                                     Err(e) => {
                                         let _ = send_message(&poll_client, &poll_token, chat_id, &format!("✗ Konnte Modell-Liste für Provider **{provider}** nicht laden: {e:#}")).await;
@@ -670,7 +670,7 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
             } else {
                 format!("{provider} · {model}", provider = config.provider, model = config.model.clone().unwrap_or_else(|| "Standardmodell".to_string()))
             };
-            let modelle_json = match crate::modelle_liste(config.provider.clone()) {
+            let modelle_json = match crate::modelle_liste_async(config.provider.clone()).await {
                 Ok(j) => j,
                 Err(e) => {
                     let _ = send_message(&client, &cfg.token, chat_id, &format!("✗ Konnte Modell-Liste nicht laden: {e:#}")).await;

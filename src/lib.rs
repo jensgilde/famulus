@@ -37,6 +37,6 @@ uniffi::include_scaffolding!("ffi");
 pub use ffi::{
     aktiver_provider, app_version, credits, credits_fuer_provider, embeddings_status, history_archiv_liste, history_archivieren,
     history_liste, history_aktualisieren, history_loeschen, history_speichern, history_suche, idle_reflexion,
-    modelle_liste, presets_aktivieren, presets_liste, presets_loeschen, presets_speichern, setze_modell,
+    modelle_liste, modelle_liste_async, presets_aktivieren, presets_liste, presets_loeschen, presets_speichern, setze_modell,
     setze_modell_modus, starte_auftrag, stoppe_auftrag, zwischenfrage, zustand, AuftragsCallback, Fehler,
 };
