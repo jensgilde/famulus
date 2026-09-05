@@ -232,6 +232,86 @@ async fn send_message_mit_optionen(
     Ok(())
 }
 
+/// Schickt die Modell-Auswahl als Inline-Keyboard (eine Option pro Zeile).
+/// Abweichend von `send_message_mit_optionen` nutzt das `callback_data` ein
+/// reserviertes Präfix `modell:<index>` statt des nackten Index. So kann der
+/// Callback-Handler eine Modellwahl eindeutig von einem normalen
+/// Options-Klick unterscheiden (der sonst als Agent-Auftrag interpretiert
+/// würde). Der Button-Text ist die Modell-ID - die wird beim Klick aus dem
+/// Markup zurückgelesen und direkt an `setze_modell` übergeben.
+async fn send_modell_auswahl(
+    client: &reqwest::Client,
+    token: &str,
+    chat_id: i64,
+    text: &str,
+    modelle: &[String],
+) -> Result<()> {
+    let inline_keyboard: Vec<Vec<serde_json::Value>> = modelle
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            vec![serde_json::json!({ "text": m, "callback_data": format!("modell:{i}") })]
+        })
+        .collect();
+    let url = format!("{API_BASE}/bot{token}/sendMessage");
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": { "inline_keyboard": inline_keyboard },
+        }))
+        .send()
+        .await
+        .context("sendMessage (Modell-Auswahl) fehlgeschlagen")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("sendMessage (Modell-Auswahl) HTTP {status}: {body}");
+    }
+    Ok(())
+}
+
+/// Zeigt die beiden verfügbaren Provider (hyper, openrouter) als
+/// Inline-Keyboard. `callback_data` nutzt das reservierte Präfix
+/// `provider:<index>`, analog zu `modell:<index>`, damit der Callback-Handler
+/// den Provider-Wechsel eindeutig von einer Modellwahl oder einem normalen
+/// Options-Klick unterscheiden kann. Die Modellliste des gewählten Providers
+/// wird erst im Callback nachgeladen - so bleibt dieser Schritt klein.
+async fn send_provider_auswahl(
+    client: &reqwest::Client,
+    token: &str,
+    chat_id: i64,
+    text: &str,
+    provider: &[&str],
+) -> Result<()> {
+    let inline_keyboard: Vec<Vec<serde_json::Value>> = provider
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            vec![serde_json::json!({ "text": p, "callback_data": format!("provider:{i}") })]
+        })
+        .collect();
+    let url = format!("{API_BASE}/bot{token}/sendMessage");
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": { "inline_keyboard": inline_keyboard },
+        }))
+        .send()
+        .await
+        .context("sendMessage (Provider-Auswahl) fehlgeschlagen")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("sendMessage (Provider-Auswahl) HTTP {status}: {body}");
+    }
+    Ok(())
+}
+
+
 /// Beendet den "lädt..."-Zustand des geklickten Buttons. Rein kosmetisch -
 /// ein Fehlschlag hier darf die eigentliche Verarbeitung nicht aufhalten,
 /// deshalb wird der Fehler nur geloggt statt weitergereicht.
@@ -371,6 +451,14 @@ static ZWISCHENFRAGE_TELEGRAM: LazyLock<Mutex<Option<tokio::sync::mpsc::Unbounde
 /// laufenden Auftrag geht (1) oder als eigener Auftrag behandelt wird (0).
 static AUFTRAG_AKTIV: AtomicBool = AtomicBool::new(false);
 
+/// Provider, den der Nutzer über `/provider` gerade gewählt hat, aber dessen
+/// Modell noch nicht geklickt ist. Der Modell-Callback liest diesen Wert und
+/// ruft dann `setze_modell(gewaehlter_provider, modell)` auf - ohne diesen
+/// Zwischenzustand wüsste der Modell-Callback nicht, dass die Modellliste zu
+/// einem neu gewählten (statt des aktuell aktiven) Providers gehört. Nach dem
+/// Wechsel wird er wieder geleert.
+static GEWAEHLTER_PROVIDER: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+
 pub async fn run(cfg: TelegramConfig) -> Result<()> {
     let client = reqwest::Client::new();
     let username = get_me(&client, &cfg.token).await?;
@@ -427,6 +515,96 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                     if !poll_chats.contains(&chat_id) {
                         continue;
                     }
+                    // ── Modellwahl (callback_data mit reserviertem Präfix) ──
+                    // Wird direkt verarbeitet statt als Agent-Auftrag zu landen.
+                    if let Some(d) = cb.data.as_deref() {
+                        // ── Providerwahl: zeigt die Modellliste des gewählten
+                        // Providers, damit /provider wie /modell endet (in einem
+                        // konkreten Modell-Click). Der Provider wird in
+                        // GEWAEHLTER_PROVIDER gemerkt, bis das Modell geklickt ist.
+                        if let Some(rest) = d.strip_prefix("provider:") {
+                            let index = rest.parse::<usize>().ok();
+                            let provider = msg
+                                .reply_markup
+                                .as_ref()
+                                .and_then(|m| index.and_then(|i| m.inline_keyboard.get(i)))
+                                .and_then(|zeile| zeile.first())
+                                .map(|knopf| knopf.text.clone());
+                            if let Some(provider) = provider {
+                                entferne_buttons(&poll_client, &poll_token, chat_id, msg.message_id).await;
+                                // Neue Providerwahl löscht eine evtl. noch stehende
+                                // alte Vorwahl.
+                                *GEWAEHLTER_PROVIDER.lock().unwrap_or_else(|e| e.into_inner()) = Some(provider.clone());
+                                let _ = send_message(&poll_client, &poll_token, chat_id, &format!("⚙️ Provider **{provider}** gewählt – lade Modelle …")).await;
+                                let modelle_json = match crate::modelle_liste(provider.clone()) {
+                                    Ok(j) => j,
+                                    Err(e) => {
+                                        let _ = send_message(&poll_client, &poll_token, chat_id, &format!("✗ Konnte Modell-Liste für Provider **{provider}** nicht laden: {e:#}")).await;
+                                        continue;
+                                    }
+                                };
+                                let modelle: Vec<String> = match serde_json::from_str::<Vec<serde_json::Value>>(&modelle_json) {
+                                    Ok(m) => m.into_iter().map(|v: serde_json::Value| v["id"].as_str().unwrap_or_default().to_string()).filter(|s| !s.is_empty()).collect(),
+                                    Err(e) => {
+                                        let _ = send_message(&poll_client, &poll_token, chat_id, &format!("✗ Modell-Liste für Provider **{provider}** nicht lesbar: {e:#}")).await;
+                                        continue;
+                                    }
+                                };
+                                if modelle.is_empty() {
+                                    let _ = send_message(&poll_client, &poll_token, chat_id, &format!("Für Provider **{provider}** sind keine Modelle verfügbar.")).await;
+                                    continue;
+                                }
+                                let text = format!("⚙️ Provider: **{provider}**\n\nWähle das Modell:");
+                                if let Err(e) = send_modell_auswahl(&poll_client, &poll_token, chat_id, &text, &modelle).await {
+                                    eprintln!("[telegram] send_modell_auswahl (Provider) fehlgeschlagen: {e:#}");
+                                }
+                            } else {
+                                eprintln!("[telegram] Provider-Klick ohne auflösbaren Provider (chat_id={chat_id})");
+                            }
+                            continue;
+                        }
+                        if let Some(rest) = d.strip_prefix("modell:") {
+                            let index = rest.parse::<usize>().ok();
+                            let modell = msg
+                                .reply_markup
+                                .as_ref()
+                                .and_then(|m| index.and_then(|i| m.inline_keyboard.get(i)))
+                                .and_then(|zeile| zeile.first())
+                                .map(|knopf| knopf.text.clone());
+                            if let Some(modell) = modell {
+                                entferne_buttons(&poll_client, &poll_token, chat_id, msg.message_id).await;
+                                let _ = send_message(&poll_client, &poll_token, chat_id, &format!("⚙️ Stelle auf Modell **{modell}** um …")).await;
+                                // Provider-Vorwahl übernehmen: Hat der Nutzer den Provider
+                                // gerade per /provider gewechselt, gilt dessen Modellliste
+                                // (und die Modellwahl schaltet auf genau diesen Provider).
+                                // Sonst der aktuell aktive Provider.
+                                let vorgewaehlter = GEWAEHLTER_PROVIDER
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .take();
+                                let ergebnis = (|| -> Result<String> {
+                                    let config = Config::load()?;
+                                    let provider = vorgewaehlter
+                                        .clone()
+                                        .unwrap_or_else(|| config.provider.clone());
+                                    crate::setze_modell(provider, modell.clone())
+                                        .map_err(|e| anyhow::anyhow!("{:#}", e))
+                                })();
+                                match ergebnis {
+                                    Ok(statuszeile) => {
+                                        let _ = send_message(&poll_client, &poll_token, chat_id, &format!("✅ Modell gewechselt.
+{statuszeile}")).await;
+                                    }
+                                    Err(e) => {
+                                        let _ = send_message(&poll_client, &poll_token, chat_id, &format!("✗ Modellwechsel fehlgeschlagen: {e:#}")).await;
+                                    }
+                                }
+                            } else {
+                                eprintln!("[telegram] Modell-Klick ohne auflösbares Modell (chat_id={chat_id})");
+                            }
+                            continue;
+                        }
+                    }
                     let gewaehlt = cb
                         .data
                         .as_deref()
@@ -469,6 +647,66 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
     // Hauptloop: verarbeitet die eingehenden Nachrichten seriell.
     while let Some(eingehend) = eingehend_rx.recv().await {
         let chat_id = eingehend.chat_id;
+
+        // ── Schnellbefehl /modell: Modellwahl als Inline-Keyboard ──
+        // Lädt live die Modelle des aktiven Providers (via ffi/modelle_liste)
+        // und bietet sie als Buttons an. Die eigentliche Umschaltung passiert
+        // im Callback-Zweig (Präfix "modell:"), damit der Klick nicht als
+        // Agent-Auftrag interpretiert wird.
+        if eingehend.text.trim() == "/modell" {
+            // Ein direkter /modell-Aufruf startet bewusst beim aktiven Provider -
+            // eine evtl. noch stehende Provider-Vorwahl /provider wäre sonst
+            // irreführend (ragte in die falsche Modellliste hinein).
+            *GEWAEHLTER_PROVIDER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = send_message(&client, &cfg.token, chat_id, &format!("✗ Konfiguration lesen fehlgeschlagen: {e:#}")).await;
+                    continue;
+                }
+            };
+            let aktuell = if config.modell_modus == "automatisch" {
+                "automatisch (Famulus wählt)".to_string()
+            } else {
+                format!("{provider} · {model}", provider = config.provider, model = config.model.clone().unwrap_or_else(|| "Standardmodell".to_string()))
+            };
+            let modelle_json = match crate::modelle_liste(config.provider.clone()) {
+                Ok(j) => j,
+                Err(e) => {
+                    let _ = send_message(&client, &cfg.token, chat_id, &format!("✗ Konnte Modell-Liste nicht laden: {e:#}")).await;
+                    continue;
+                }
+            };
+            let modelle: Vec<String> = match serde_json::from_str::<Vec<serde_json::Value>>(&modelle_json) {
+                Ok(m) => m.into_iter().map(|v: serde_json::Value| v["id"].as_str().unwrap_or_default().to_string()).filter(|s| !s.is_empty()).collect(),
+                Err(e) => {
+                    let _ = send_message(&client, &cfg.token, chat_id, &format!("✗ Modell-Liste nicht lesbar: {e:#}")).await;
+                    continue;
+                }
+            };
+            if modelle.is_empty() {
+                let _ = send_message(&client, &cfg.token, chat_id, "Es sind keine Modelle verfügbar.").await;
+                continue;
+            }
+            let text = format!("⚙️ Aktuell: **{aktuell}**\n\nWähle das Modell (Provider: `{}`):", config.provider);
+            if let Err(e) = send_modell_auswahl(&client, &cfg.token, chat_id, &text, &modelle).await {
+                eprintln!("[telegram] send_modell_auswahl fehlgeschlagen: {e:#}");
+            }
+            continue;
+        }
+
+        // ── Schnellbefehl /provider: Providerwahl als Inline-Keyboard ──
+        // Der gewählte Provider wird im Callback über GEWAEHLTER_PROVIDER
+        // gemerkt, damit die anschließende Modellwahl (send_modell_auswahl)
+        // auf genau diesen Provider schaltet statt auf den aktuell aktiven.
+        if eingehend.text.trim() == "/provider" {
+            let provider_liste = ["hyper", "openrouter"];
+            let text = "⚙️ Provider wählen:";
+            if let Err(e) = send_provider_auswahl(&client, &cfg.token, chat_id, text, &provider_liste).await {
+                eprintln!("[telegram] send_provider_auswahl fehlgeschlagen: {e:#}");
+            }
+            continue;
+        }
 
         // ── Schnellbefehl /status: kostet nichts, antwortet sofort ──
         if eingehend.text.trim() == "/status" {

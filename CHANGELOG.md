@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.1] – 2026-09-05
+
+### Neu
+- **Telegram `/modell` + `/provider`**: Modell und Provider sind jetzt direkt per Telegram wechselbar.
+  - `/modell` lädt live die Modellliste des aktiven Providers (via `modelle_liste`) und zeigt sie als Inline-Keyboard; der Klick ruft `setze_modell` auf und schaltet auf manuellen Modus (wie die GUI).
+  - `/provider` showt die Provider (hyper, openrouter) als Buttons; die Wahl lädt die Modelle des gewählten Providers und führt in die Modellwahl. Der Modell-Callback übernimmt den gewählten Provider über die Zwischenvariable `GEWAEHLTER_PROVIDER`, danach wird sie geleert.
+
+## [1.3.0] – 2026-09-05
+
+### Neu
+- **Task-Observer-Review-Log**: Wöchentlicher Selbst-Review (sonntags 06:30, neuer launchd-Agent `com.jensgilde.famulus-wecker.review`) wertet die seit dem letzten Review gesammelten Korrekturen, Präferenzen, Lektionen und wiederkehrenden Muster aus und schreibt die 3–5 wirksamsten Skill-Schärfungen als Log nach `vault/03-Wissen/Famulus-Review.md`. Inspiriert vom Claude-Code-Plugin „Task Observer" (niklas.how/68), aber an Famulus' vorhandene In-Task-Lernmechanismen (Notizbuch, Präferenzen, Idle-Reflexion) angedockt statt als separate Skill-Schicht.
+
 ## [1.2.0] – 2026-09-05
 
 ### Neu
