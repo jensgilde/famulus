@@ -323,12 +323,13 @@ async fn send_voice(
 /// Erzeugt aus einem Antworttext eine deutsche Sprachnachricht (macOS-eigenes
 /// `say` + `afconvert` zu WAV) und schickt sie per `send_voice`.
 async fn antworte_als_sprach(datei_pfad: &str, text: &str) -> Result<()> {
-    // macOS `say` mit deutscher Stimme (Anna), Ausgabe als AIFF, dann nach
-    // WAV konvertieren (Telegram sendVoice akzeptiert kein AIFF).
+    // macOS `say` mit männlicher deutscher Stimme (Flo - modernste/natürlichste
+    // `say`-Stimme), Ausgabe als AIFF, dann nach WAV konvertieren
+    // (Telegram sendVoice akzeptiert kein AIFF).
     let aiff = format!("{datei_pfad}.aiff");
     let status = tokio::process::Command::new("say")
         .arg("-v")
-        .arg("Anna")
+        .arg("Flo (Deutsch (Deutschland))")
         .arg("-o")
         .arg(&aiff)
         .arg(text)
