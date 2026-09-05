@@ -1043,6 +1043,41 @@ impl Gedaechtnis {
         Ok(n as usize)
     }
 
+    /// Hält die Provider-Statistik-Tabelle auf einer handhabbaren Größe.
+    /// Behält die neuesten 10.000 Einträge – das reicht für aggregierte
+    /// Statistiken (Erfolgsquote, Latenz) und Fehlerdiagnosen, ohne dass
+    /// die Tabelle bei ~8.000 Aufrufen/Monat unbegrenzt wächst. SQLite
+    /// verkraftet mehr, aber es ist tote Masse ohne Nutzen jenseits der
+    /// aggregierten Werte.
+    pub fn provider_statistik_bereinigen(&self) -> Result<usize> {
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
+        let anzahl: i64 = verbindung.query_row(
+            "SELECT count(*) FROM provider_statistik", [], |r| r.get(0))?;
+        if anzahl <= 10_000 {
+            return Ok(0);
+        }
+        let geloescht = verbindung.execute(
+            "DELETE FROM provider_statistik WHERE id NOT IN (
+                SELECT id FROM provider_statistik ORDER BY id DESC LIMIT 10000
+            )", [])?;
+        Ok(geloescht)
+    }
+
+    /// Entfernt Embeddings, deren Erinnerung nicht mehr existiert (z.B.
+    /// weil `erinnerung_vergessen` ohne `PRAGMA foreign_keys=ON` lief,
+    /// oder weil `DELETE FROM erinnerungen` ohne `ON DELETE CASCADE`). Der
+    /// Test in `vergessen_loescht_per_id_und_kaskadiert_das_embedding`
+    /// beweist, dass foreign_keys normalerweise funktioniert – aber bei
+    /// `PRAGMA`-Aussetzern oder manuellen Löschungen können verwaiste
+    /// Embeddings zurückbleiben. Diese Methode räumt sie periodisch auf.
+    pub fn embeddings_bereinigen(&self) -> Result<usize> {
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
+        let geloescht = verbindung.execute(
+            "DELETE FROM erinnerungen_embedding
+             WHERE id NOT IN (SELECT id FROM erinnerungen)", [])?;
+        Ok(geloescht)
+    }
+
     // ── Vergessen ─────────────────────────────────────────────────────
 
     /// Findet Erinnerungen, deren Inhalt einen Begriff enthält - Vorstufe zu
@@ -1517,6 +1552,109 @@ mod tests {
         assert!(treffer[0].2.contains("Hermes-Vault"));
 
         assert!(g.erinnerung_suchen("nichts_davon_kommt_vor").unwrap().is_empty());
+        std::fs::remove_file(pfad).ok();
+    }
+
+    // ── Bereinigung ───────────────────────────────────────────────────
+
+    #[test]
+    fn embeddings_bereinigen_entfernt_verwaiste() {
+        let pfad = temp();
+        let g = Gedaechtnis::oeffnen(&pfad).unwrap();
+        // Erinnerung merken und Embedding manuell einfügen
+        g.merken(ART_FAKT, "Test für Bereinigung", "test").unwrap();
+        let id: i64 = {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung
+                .query_row("SELECT id FROM erinnerungen", [], |r| r.get(0))
+                .unwrap()
+        };
+        {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung
+                .execute(
+                    "INSERT INTO erinnerungen_embedding (id, embedding) VALUES (?1, ?2)",
+                    params![id, vec![0u8; 4]],
+                )
+                .unwrap();
+        }
+        // Verwaistes Embedding erzeugen: Erinnerung direkt löschen mit
+        // foreign_keys aus (simuliert PRAGMA-Aussetzer)
+        {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+            verbindung.execute("DELETE FROM erinnerungen WHERE id = ?1", params![id]).unwrap();
+            verbindung.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        }
+        // Verwaistes Embedding existiert noch
+        let n: i64 = {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung
+                .query_row("SELECT count(*) FROM erinnerungen_embedding", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(n, 1, "verwaistes Embedding muss erstmal existieren");
+
+        let geloescht = g.embeddings_bereinigen().unwrap();
+        assert_eq!(geloescht, 1);
+
+        let n: i64 = {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung
+                .query_row("SELECT count(*) FROM erinnerungen_embedding", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(n, 0);
+        std::fs::remove_file(pfad).ok();
+    }
+
+    #[test]
+    fn provider_statistik_bereinigen_entfernt_zu_alte_eintraege() {
+        let pfad = temp();
+        let g = Gedaechtnis::oeffnen(&pfad).unwrap();
+        // 10.001 Einträge einfügen (überschreitet die 10.000er-Schwelle)
+        {
+            let verbindung = g.verbindung.lock().unwrap();
+            for i in 0..10_001 {
+                verbindung
+                    .execute(
+                        "INSERT INTO provider_statistik (provider, erfolg, dauer_ms) VALUES ('test', 1, 100)",
+                        [],
+                    )
+                    .unwrap();
+            }
+        }
+        let geloescht = g.provider_statistik_bereinigen().unwrap();
+        assert_eq!(geloescht, 1, "genau ein Eintrag muss weggefallen sein");
+
+        let uebrig: i64 = {
+            let verbindung = g.verbindung.lock().unwrap();
+            verbindung
+                .query_row("SELECT count(*) FROM provider_statistik", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(uebrig, 10_000);
+        std::fs::remove_file(pfad).ok();
+    }
+
+    #[test]
+    fn provider_statistik_bereinigen_laesst_kleine_tabelle_in_ruhe() {
+        let pfad = temp();
+        let g = Gedaechtnis::oeffnen(&pfad).unwrap();
+        // Nur 5 Einträge – weit unter der Schwelle
+        {
+            let verbindung = g.verbindung.lock().unwrap();
+            for _ in 0..5 {
+                verbindung
+                    .execute(
+                        "INSERT INTO provider_statistik (provider, erfolg, dauer_ms) VALUES ('test', 1, 100)",
+                        [],
+                    )
+                    .unwrap();
+            }
+        }
+        let geloescht = g.provider_statistik_bereinigen().unwrap();
+        assert_eq!(geloescht, 0, "darf nichts löschen unter der Schwelle");
         std::fs::remove_file(pfad).ok();
     }
 }

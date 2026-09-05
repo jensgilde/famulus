@@ -1045,7 +1045,8 @@ fn json_herausschneiden(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ist_ankuendigung_ohne_ausfuehrung, ist_einfacher_auftrag, json_herausschneiden, kuerzen};
+    use super::{ist_ankuendigung_ohne_ausfuehrung, ist_einfacher_auftrag, json_herausschneiden, kuerzen, nachrichten_kuerzen};
+    use crate::llm::Message;
 
     #[test]
     fn erkennt_einfache_aufträge() {
@@ -1161,6 +1162,42 @@ mod tests {
     }
 
     // ── rufe_mit_wiederaufsetzen ─────────────────────────────────────
+
+
+    #[test]
+    fn nachrichten_kuerzen_behaelt_system_prompt_und_hinten() {
+        let sys = Message::User("Du bist ein hilfreicher Assistent.".to_string());
+        let mut nachrichten = vec![sys.clone()];
+        for i in 0..500 {
+            nachrichten.push(Message::User(format!(
+                "Nachricht {}: {} Nachricht",
+                i, "x".repeat(300)
+            )));
+        }
+        let letzte = Message::User("WICHTIG: Letzte Nachricht!".to_string());
+        nachrichten.push(letzte.clone());
+
+        nachrichten_kuerzen(&mut nachrichten);
+
+        assert!(matches!(&nachrichten[0], Message::User(t) if t == "Du bist ein hilfreicher Assistent."));
+        let hinweis_idx = nachrichten.iter().position(|m| {
+            if let Message::User(t) = m { t.contains("frühere Nachrichten wurden aus Platzgründen") } else { false }
+        });
+        assert!(hinweis_idx.is_some(), "Hinweis auf Kuerzung fehlt");
+        assert!(matches!(nachrichten.last().unwrap(), Message::User(t) if t == "WICHTIG: Letzte Nachricht!"));
+    }
+
+    #[test]
+    fn nachrichten_kuerzen_laesst_kurze_historie_unveraendert() {
+        let mut nachrichten = vec![
+            Message::User("System".to_string()),
+            Message::User("Hallo".to_string()),
+            Message::Assistant { text: "Hi!".to_string(), tool_calls: vec![] },
+        ];
+        let original_len = nachrichten.len();
+        nachrichten_kuerzen(&mut nachrichten);
+        assert_eq!(nachrichten.len(), original_len);
+    }
 
     mod wiederaufsetzen {
         use super::super::*;

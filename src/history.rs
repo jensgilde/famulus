@@ -248,6 +248,26 @@ impl History {
         )?;
         Ok(())
     }
+
+    /// Räumt alte Chat-Verläufe auf: behält die letzten `max` nicht-archivierten
+    /// und alle archivierten Chats, löscht alles andere. Verhindert, dass die
+    /// `chats`/`chats_fts`-Tabellen unbegrenzt wachsen. Die FTS5-Trigger sorgen
+    /// dafür, dass gelöschte Chats automatisch aus dem Suchindex verschwinden.
+    /// Gibt die Anzahl gelöschter Chats zurück.
+    pub fn bereinigen(&self, max_nicht_archiviert: usize) -> Result<usize> {
+        let verbindung = self.verbindung.lock().unwrap_or_else(|e| e.into_inner());
+        let anzahl: i64 = verbindung.query_row(
+            "SELECT count(*) FROM chats WHERE archiviert = 0", [], |r| r.get(0))?;
+        if anzahl <= max_nicht_archiviert as i64 {
+            return Ok(0);
+        }
+        let geloescht = verbindung.execute(
+            "DELETE FROM chats WHERE archiviert = 0 AND id NOT IN (
+                SELECT id FROM chats WHERE archiviert = 0
+                ORDER BY id DESC LIMIT ?1
+            )", [max_nicht_archiviert as i64])?;
+        Ok(geloescht)
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +345,38 @@ mod tests {
         assert_eq!(h.liste().unwrap().len(), 1, "oeffnen() darf keine Zeilen verlieren");
         let treffer = h.suche("Netzwerkfehler").unwrap();
         assert_eq!(treffer.len(), 1, "Nachträglich indizierter Alt-Chat muss auffindbar sein");
+        std::fs::remove_file(pfad).ok();
+    }
+
+    #[test]
+    fn bereinigen_entfernt_alte_chats() {
+        let pfad = temp();
+        let h = History::oeffnen(&pfad).unwrap();
+        h.speichern("Chat 1", "test").unwrap();
+        h.speichern("Chat 2", "test").unwrap();
+        h.speichern("Chat 3", "test").unwrap();
+        h.speichern("Chat 4", "test").unwrap();
+        h.speichern("Chat 5", "test").unwrap();
+        let geloescht = h.bereinigen(3).unwrap();
+        assert_eq!(geloescht, 2);
+        let uebrig = h.liste().unwrap();
+        assert_eq!(uebrig.len(), 3);
+        let titel: Vec<String> = uebrig.iter().map(|c| c.titel.clone()).collect();
+        assert!(titel.contains(&"Chat 5".to_string()));
+        assert!(titel.contains(&"Chat 4".to_string()));
+        assert!(titel.contains(&"Chat 3".to_string()));
+        std::fs::remove_file(pfad).ok();
+    }
+
+    #[test]
+    fn bereinigen_laesst_kleine_historie_in_ruhe() {
+        let pfad = temp();
+        let h = History::oeffnen(&pfad).unwrap();
+        h.speichern("Chat 1", "test").unwrap();
+        h.speichern("Chat 2", "test").unwrap();
+        let geloescht = h.bereinigen(5).unwrap();
+        assert_eq!(geloescht, 0);
+        assert_eq!(h.liste().unwrap().len(), 2);
         std::fs::remove_file(pfad).ok();
     }
 }
