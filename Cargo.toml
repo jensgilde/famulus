@@ -43,7 +43,7 @@ tokio = { version = "1", default-features = false, features = [
     "time",             # Inaktivitaets-Timeout beim Lesen von Antwort-Stuecken
     "sync",             # mpsc-Kanal fuer Zwischenfragen (FFI-Bruecke)
 ] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 bytes = "1"  # Chunk-Typ der gestreamten LLM-Antwort
 futures-util = "0.3"  # StreamExt für die gestreamte LLM-Antwort
 serde = { version = "1", features = ["derive"] }

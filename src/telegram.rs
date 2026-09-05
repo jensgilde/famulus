@@ -108,6 +108,9 @@ struct TgMessage {
     /// selbst irgendwo merken müssten.
     #[serde(default)]
     reply_markup: Option<TgReplyMarkup>,
+    /// Empfangene Sprachnachricht (Voice) - Eingang für die Sprach-Eingabe.
+    #[serde(default)]
+    voice: Option<TgVoice>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,6 +140,11 @@ struct TgChat {
 #[derive(Debug, Deserialize)]
 struct TgUser {
     username: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TgVoice {
+    file_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,6 +200,146 @@ async fn send_message(client: &reqwest::Client, token: &str, chat_id: i64, text:
             anyhow::bail!("sendMessage HTTP {status}: {body}");
         }
     }
+    Ok(())
+}
+
+/// Lädt eine Telegram-Datei (file_id) über die getFile-API herunter und
+/// gibt ihren Inhalt als Bytes samt Dateinamen zurück. Erforderlich für die
+/// Sprach-Eingabe: Der Bot muss die eingehende Voice-Datei erst von Telegram
+/// holen, bevor er sie transkribiert.
+async fn download_datei(
+    client: &reqwest::Client,
+    token: &str,
+    file_id: &str,
+) -> Result<(bytes::Bytes, String)> {
+    let url = format!("{API_BASE}/bot{token}/getFile");
+    let resp: TgResponse<serde_json::Value> = client
+        .post(&url)
+        .json(&serde_json::json!({ "file_id": file_id }))
+        .send()
+        .await?
+        .json()
+        .await?;
+    if !resp.ok {
+        anyhow::bail!("getFile fehlgeschlagen: {}", resp.description.unwrap_or_default());
+    }
+    let result = resp.result.ok_or_else(|| anyhow::anyhow!("getFile ohne Ergebnis"))?;
+    let file_path = result["file_path"].as_str().ok_or_else(|| anyhow::anyhow!("getFile ohne file_path"))?;
+    let download_url = format!("https://api.telegram.org/file/bot{token}/{file_path}");
+    let datei = client.get(&download_url).send().await?.error_for_status()?;
+    let bytes = datei.bytes().await?;
+    let name = file_path.rsplit('/').next().unwrap_or("voice").to_string();
+    Ok((bytes, name))
+}
+
+/// Konvertiert eine opus/mp4-Sprachnachricht (wie Telegram sie liefert) in
+/// ein mono-WAV, wie Vosk es erwartet. Beide Werkzeuge sind macOS-Standard:
+/// `afconvert` für den Formatwechsel, optional werden mehrkanalige Aufnahmen
+/// über `ffmpeg`/... abgelehnt. Vosk braucht mono+16bit - afconvert macht
+/// genau das per `-f WAVE -d LEI16 -c 1`.
+async fn konvertiere_nach_wav(quelle: &str, ziel: &str) -> Result<()> {
+    let status = tokio::process::Command::new("afconvert")
+        .args(["-f", "WAVE", "-d", "LEI16", "-c", "1", quelle, ziel])
+        .status()
+        .await
+        .context("afconvert konnte nicht gestartet werden - Datei-Formatwechsel fehlgeschlagen")?;
+    if !status.success() {
+        anyhow::bail!("afconvert schlug fehl (Status {status}) - ist die Quelle ein unterstütztes Audiodateiformat?");
+    }
+    Ok(())
+}
+
+/// Transkribiert eine Voice-Datei mit der Vosk-Sprachsteuerung. Die Vosk-
+/// Toolchain (Modell + Python-Skript) liegt auf dem Fedora-Linux
+/// (`~/.local/share/vosk/famulus_stt.py`) - deshalb läuft die Erkennung dort
+/// per SSH-Fernaufruf. Das Script schreibt den erkannten Text auf stdout.
+/// Zugriffsdaten des Linux kommen aus ~/.famulus/.env (FAMULUS_LINUX_HOST /
+/// FAMULUS_LINUX_SSH_TARGET, sonst Standard "jgilde@100.90.243.56").
+async fn transkribiere_voice(wav_pfad: &str) -> Result<String> {
+    let ssh_ziel = std::env::var("FAMULUS_LINUX_SSH_TARGET")
+        .unwrap_or_else(|_| "jgilde@100.90.243.56".to_string());
+    // WAV per scp auf das Linux bringen (vorübergehend unter /tmp)
+    let remote_tmp = format!("/tmp/famulus_stt_{}.wav", std::process::id());
+    let scp_status = tokio::process::Command::new("scp")
+        .arg(wav_pfad)
+        .arg(format!("{ssh_ziel}:{remote_tmp}"))
+        .status()
+        .await
+        .context("scp konnte nicht gestartet werden")?;
+    if !scp_status.success() {
+        anyhow::bail!("scp zum Linux fehlgeschlagen (Status {scp_status})");
+    }
+    let out = tokio::process::Command::new("ssh")
+        .arg(ssh_ziel)
+        .args(["python3", "/home/jgilde/.local/share/vosk/famulus_stt.py", &remote_tmp])
+        .output()
+        .await
+        .context("ssh zur Vosk-Erkennung konnte nicht gestartet werden")?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let _ = tokio::process::Command::new("ssh")
+        .arg(std::env::var("FAMULUS_LINUX_SSH_TARGET").unwrap_or_else(|_| "jgilde@100.90.243.56".to_string()))
+        .arg(format!("rm -f {remote_tmp}"))
+        .status()
+        .await;
+    Ok(text)
+}
+
+/// Sendet eine Sprachnachricht (sendVoice) an den Chat. `pfad` muss auf eine
+/// Audiodatei zeigen, die Telegram als Voice akzeptiert (WAV funktioniert).
+/// Multipart-Upload, analog zu Telegram-Dokumenten.
+async fn send_voice(
+    client: &reqwest::Client,
+    token: &str,
+    chat_id: i64,
+    pfad: &str,
+) -> Result<()> {
+    let file = tokio::fs::File::open(pfad).await.context("Sprachdatei nicht lesbar")?;
+    let dateiname = std::path::Path::new(pfad)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("voice.wav")
+        .to_string();
+    let form = reqwest::multipart::Form::new()
+        .text("chat_id", chat_id.to_string())
+        .part(
+            "voice",
+            reqwest::multipart::Part::stream(file).file_name(dateiname),
+        );
+    let url = format!("{API_BASE}/bot{token}/sendVoice");
+    let resp = client
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .context("sendVoice fehlgeschlagen")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("sendVoice HTTP {status}: {body}");
+    }
+    Ok(())
+}
+
+/// Erzeugt aus einem Antworttext eine deutsche Sprachnachricht (macOS-eigenes
+/// `say` + `afconvert` zu WAV) und schickt sie per `send_voice`.
+async fn antworte_als_sprach(datei_pfad: &str, text: &str) -> Result<()> {
+    // macOS `say` mit deutscher Stimme (Anna), Ausgabe als AIFF, dann nach
+    // WAV konvertieren (Telegram sendVoice akzeptiert kein AIFF).
+    let aiff = format!("{datei_pfad}.aiff");
+    let status = tokio::process::Command::new("say")
+        .arg("-v")
+        .arg("Anna")
+        .arg("-o")
+        .arg(&aiff)
+        .arg(text)
+        .status()
+        .await
+        .context("say konnte nicht gestartet werden")?;
+    if !status.success() {
+        anyhow::bail!("say (macOS-TTS) schlug fehl (Status {status})");
+    }
+    konvertiere_nach_wav(&aiff, datei_pfad).await?;
+    let _ = tokio::fs::remove_file(&aiff).await;
     Ok(())
 }
 
@@ -459,6 +607,11 @@ static AUFTRAG_AKTIV: AtomicBool = AtomicBool::new(false);
 /// Wechsel wird er wieder geleert.
 static GEWAEHLTER_PROVIDER: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
+/// Schalter für die Sprach-Ausgabe: Steht `SPRACHE_AUS` auf `true` (per
+/// `/sprache aus`), schickt der Bot nur noch Text. Standard ist `false` -
+/// Antworten kommen zusätzlich als Sprachnachricht.
+static SPRACHE_AUS: AtomicBool = AtomicBool::new(false);
+
 pub async fn run(cfg: TelegramConfig) -> Result<()> {
     let client = reqwest::Client::new();
     let username = get_me(&client, &cfg.token).await?;
@@ -623,7 +776,6 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                 }
 
                 let Some(msg) = update.message else { continue };
-                let Some(text) = msg.text else { continue };
                 let chat_id = msg.chat.id;
                 if !poll_chats.contains(&chat_id) {
                     let wer = msg
@@ -636,6 +788,60 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                     // Bewusst KEINE Antwort an nicht-autorisierte Chats: Eine
                     // "Nicht autorisiert"-Meldung bestätigt jedem Scanner, dass hier
                     // ein Bot existiert und läuft. Stille Abweisung verrät nichts.
+                    continue;
+                }
+                // ── Text- oder Sprachnachricht zur Agent-Verarbeitung ──
+                // Normale Textnachricht (default) ODER Sprachnachricht, die
+                // erst transkribiert wird (Sprach-Eingabe). Beides landet
+                // als identisches `Eingehend { chat_id, text }` im Hauptloop.
+                let text: String;
+                if let Some(t) = msg.text.as_deref() {
+                    text = t.to_string();
+                } else if let Some(voice) = &msg.voice {
+                    let _ = send_message(&poll_client, &poll_token, chat_id, "🎙️ Erkenne Sprache …").await;
+                    // 1) Voice-Datei von Telegram laden
+                    let (bytes, _dateiname) = match download_datei(&poll_client, &poll_token, &voice.file_id).await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            eprintln!("[telegram] Voice-Download fehlgeschlagen: {e:#}");
+                            let _ = send_message(&poll_client, &poll_token, chat_id, &format!("✗ Sprachnachricht konnte nicht geladen werden: {e}")).await;
+                            continue;
+                        }
+                    };
+                    // 2) Roh-Format (opus/mp4) in WAV konvertieren
+                    let tmp = std::env::temp_dir().join(format!("famulus_voice_{}_{}.opus", msg.message_id, std::process::id()));
+                    let wav = tmp.with_extension("wav");
+                    let _ = tokio::fs::write(&tmp, bytes).await;
+                    let roh = tmp.to_string_lossy().to_string();
+                    let ziel = wav.to_string_lossy().to_string();
+                    if let Err(e) = konvertiere_nach_wav(&roh, &ziel).await {
+                        eprintln!("[telegram] WAV-Konvertierung fehlgeschlagen: {e:#}");
+                        let _ = send_message(&poll_client, &poll_token, chat_id, &format!("✗ Sprachnachricht nicht konvertierbar: {e}")).await;
+                        let _ = tokio::fs::remove_file(&tmp).await;
+                        continue;
+                    }
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    // 3) Transkribieren (Vosk auf dem Linux)
+                    match transkribiere_voice(&ziel).await {
+                        Ok(erkannt) if !erkannt.is_empty() => {
+                            println!("[telegram] Sprachnachricht erkannt: {erkannt}");
+                            text = erkannt;
+                        }
+                        Ok(_) => {
+                            let _ = send_message(&poll_client, &poll_token, chat_id, "✗ Konnte nichts in der Sprachnachricht verstehen.").await;
+                            let _ = tokio::fs::remove_file(&wav).await;
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("[telegram] STT fehlgeschlagen: {e:#}");
+                            let _ = send_message(&poll_client, &poll_token, chat_id, &format!("✗ Spracherkennung fehlgeschlagen: {e}")).await;
+                            let _ = tokio::fs::remove_file(&wav).await;
+                            continue;
+                        }
+                    }
+                    let _ = tokio::fs::remove_file(&wav).await;
+                } else {
+                    // Weder Text noch Voice - z.B. Foto, Sticker, o.ä. ignorieren.
                     continue;
                 }
                 println!("[telegram] Nachricht von chat_id={chat_id}: {text}");
@@ -720,6 +926,24 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
             let mut verlauf_guard = verlaeufe.lock().unwrap_or_else(|e| e.into_inner());
             verlauf_guard.entry(chat_id).or_default().clone()
         };
+
+        // ── /sprache: Sprach-Ausgabe an/aus (eigener Code, kein Agent) ──
+        // Steuert, ob die Antworten statt Text zusätzlich als Sprachnachricht
+        // (TTS via macOS `say`) rausgehen. Standard ist An - wer es nicht
+        // will, schaltet mit `/sprache aus` auf reinen Text um.
+        match eingehend.text.trim() {
+            "/sprache" | "/sprache ein" => {
+                SPRACHE_AUS.store(false, Ordering::SeqCst);
+                let _ = send_message(&client, &cfg.token, chat_id, "🔊 Sprach-Ausgabe **an**: Antworten kommen zusätzlich als Sprachnachricht.").await;
+                continue;
+            }
+            "/sprache aus" => {
+                SPRACHE_AUS.store(true, Ordering::SeqCst);
+                let _ = send_message(&client, &cfg.token, chat_id, "🔇 Sprach-Ausgabe **aus**: Antworten nur noch als Text.").await;
+                continue;
+            }
+            _ => {}
+        }
 
         // ── /reset: Verlauf sichern und löschen (eigener Code, kein Agent) ──
         if eingehend.text.trim() == "/reset" {
@@ -965,6 +1189,25 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
 
         if let Err(e) = send_message(&client, &cfg.token, chat_id, &antwort).await {
             eprintln!("[telegram] Antwort senden fehlgeschlagen: {e:#}");
+        }
+
+        // ── Sprach-Ausgabe: Antwort zusätzlich als Sprachnachricht (TTS) ──
+        // aktiv, solange nicht per /sprache aus deaktiviert. Markdown-Symbole
+        // werden vor dem Vorlesen entfernt, sehr lange Antworten gekürzt.
+        if !SPRACHE_AUS.load(Ordering::SeqCst) && !antwort.trim().is_empty() {
+            let sprechtext = antwort
+                .replace(['*', '_', '`', '#'], "")
+                .chars()
+                .take(400)
+                .collect::<String>();
+            let sprachpfad = std::env::temp_dir().join(format!("famulus_tts_{}.wav", std::process::id()));
+            let sprachpfad_str = sprachpfad.to_string_lossy().to_string();
+            if let Err(e) = antworte_als_sprach(&sprachpfad_str, &sprechtext).await {
+                eprintln!("[telegram] TTS (say) fehlgeschlagen: {e:#}");
+            } else if let Err(e) = send_voice(&client, &cfg.token, chat_id, &sprachpfad_str).await {
+                eprintln!("[telegram] Sprachnachricht senden fehlgeschlagen: {e:#}");
+            }
+            let _ = tokio::fs::remove_file(&sprachpfad).await;
         }
 
         {
