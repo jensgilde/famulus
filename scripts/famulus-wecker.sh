@@ -8,6 +8,7 @@
 #   mail     : wöchentlich
 #   vault    : monatlich
 #   reflexion: alle 6h (Idle-Reflexion -> aktiv)
+#   review    : wöchentlich Sonntag (Task-Observer-Review-Log)
 #
 # Wird von launchd ohne eigene Umgebung aufgerufen -> PATH hier setzen.
 
@@ -77,6 +78,13 @@ case "$typ" in
     # Idle-Reflexion -> aktiv werden, wenn etwas fällig ist
     log "reflexion: 6-Stunden-Zyklus"
     run_famulus "Idle-Reflexion in Handeln: Prüfe selbstständig, ob in den nächsten 48 Stunden eine wiederkehrende Aufgabe fällig ist (Kicktipp-Spieltag, wöchentliche Mail-Aufräumaktion, monatlicher Vault-Cleanup). Falls ja, beginne die betreffende Aufgabe jetzt proaktiv. Falls nichts fällig ist, tue nichts weiter."
+    ;;
+
+  review)
+    # Wöchentlicher Task-Observer-Review (Sonntag): aus Korrekturen/Präferenzen
+    # der Woche die wirksamsten Skill-Schärfungen ableiten und als Log sichern.
+    log "review: wöchentlicher Task-Observer-Review"
+    run_famulus "Führe den wöchentlichen Task-Observer-Review durch. Werte die seit dem letzten Review gesammelten Korrekturen, Präferenzen, Lektionen und wiederkehrenden Muster aus (Notizbuch, Gedächtnis/Erinnerungen, Vault). Schreibe in den Vault unter 03-Wissen/Famulus-Review.md ein knappes Review-Log mit: (1) die 3 bis 5 wirksamsten Skill-Schärfungen für die kommende Woche, konkret und umsetzbar formuliert, (2) was gut lief, (3) welche Dinge du weiterhin korrigieren musstest. Überschreibe die vorherige Review-Notiz, behalte aber unten eine kurze Historie der letzten 4 Einträge."
     ;;
 
   alle)
