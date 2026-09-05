@@ -430,8 +430,7 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                     let gewaehlt = cb
                         .data
                         .as_deref()
-                        .and_then(|d| d.parse::<usize>().ok())
-                        .and_then(|i| msg.reply_markup.as_ref().map(|m| (i, m)))
+                        .and_then(|d| d.parse::<usize>().ok()).zip(msg.reply_markup.as_ref())
                         .and_then(|(i, markup)| markup.inline_keyboard.get(i))
                         .and_then(|zeile| zeile.first())
                         .map(|knopf| knopf.text.clone());
@@ -456,7 +455,9 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                     eprintln!(
                         "[telegram] Abgewiesen: chat_id={chat_id} (@{wer}) ist nicht auf der Allowlist"
                     );
-                    let _ = send_message(&poll_client, &poll_token, chat_id, "Nicht autorisiert.").await;
+                    // Bewusst KEINE Antwort an nicht-autorisierte Chats: Eine
+                    // "Nicht autorisiert"-Meldung bestätigt jedem Scanner, dass hier
+                    // ein Bot existiert und läuft. Stille Abweisung verrät nichts.
                     continue;
                 }
                 println!("[telegram] Nachricht von chat_id={chat_id}: {text}");
@@ -475,13 +476,16 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
             continue;
         }
 
-        let mut verlauf_guard = verlaeufe.lock().unwrap_or_else(|e| e.into_inner());
-        let verlauf_vec: &mut Vec<Message> =
-            verlauf_guard.entry(chat_id).or_default();
+        // Lock früh nehmen, Verlauf clonen, Lock droppen - nicht über
+        // .await halten (deadlock-Gefahr, Clippy await_holding_lock).
+        let vorherige: Vec<Message> = {
+            let mut verlauf_guard = verlaeufe.lock().unwrap_or_else(|e| e.into_inner());
+            verlauf_guard.entry(chat_id).or_default().clone()
+        };
 
         // ── /reset: Verlauf sichern und löschen (eigener Code, kein Agent) ──
         if eingehend.text.trim() == "/reset" {
-            if verlauf_vec.is_empty() {
+            if vorherige.is_empty() {
                 let _ = send_message(&client, &cfg.token, chat_id, "Kein Chatverlauf zum Zurücksetzen.").await;
                 continue;
             }
@@ -502,7 +506,6 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
             let ui: Arc<dyn Ui> = Arc::new(TelegramUi { tx });
             let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
             let (_zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
-            let vorherige = verlauf_vec.clone();
             let n = vorherige.len();
             let reset_prompt = format!(
                 "Der Chatverlauf ({n} Nachrichten) wird gleich gelöscht.              Fasse zuerst das Wichtigste zusammen, das ich mir merken sollte:              Fakten über Jens, seine Präferenzen, laufende Projekte, offene              Aufgaben und Lektionen. Nutze das notizbuch-Tool, um die wichtigsten              Erkenntnisse (maximal 10) zu speichern. Gib dann eine kurze              Zusammenfassung, was du gespeichert hast."
@@ -555,7 +558,8 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
 "); }
                 antwort.push_str(&format!("✗ {e:#}"));
             }
-            verlauf_vec.clear();
+            verlaeufe.lock().unwrap_or_else(|e| e.into_inner())
+                .entry(chat_id).or_default().clear();
             let bestaetigung = format!("✅ Chatverlauf gelöscht.
 
 {}", antwort);
@@ -598,7 +602,7 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
         let agent = Agent::new(config, provider, Arc::clone(&ui)).await;
 
         let text = eingehend.text.clone();
-        let vorherige = verlauf_vec.clone();
+        // vorherige wurde bereits beim Lock geklont (s.o.)
         let (zf_tx, zf_rx) = tokio::sync::mpsc::unbounded_channel();
         *ZWISCHENFRAGE_TELEGRAM.lock().unwrap_or_else(|e| e.into_inner()) = Some(zf_tx);
 
@@ -687,21 +691,18 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
                 // Zwischenfragen weiterreichen - das war die Kern-Stille:
                 // alte Version las erst nach dem Auftrag wieder.
                 nachricht = eingehend_rx.recv() => {
-                    match nachricht {
-                        Some(n) => {
-                            if n.text.trim() == "/status" {
-                                let _ = send_message(&client, &cfg.token, n.chat_id, &status_text().await).await;
-                                continue;
-                            }
-                            if let Some(tx) = ZWISCHENFRAGE_TELEGRAM
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .as_ref()
-                            {
-                                let _ = tx.send(n.text);
-                            }
+                    if let Some(n) = nachricht {
+                        if n.text.trim() == "/status" {
+                            let _ = send_message(&client, &cfg.token, n.chat_id, &status_text().await).await;
+                            continue;
                         }
-                        None => {}
+                        if let Some(tx) = ZWISCHENFRAGE_TELEGRAM
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .as_ref()
+                        {
+                            let _ = tx.send(n.text);
+                        }
                     }
                 }
             }
@@ -728,11 +729,15 @@ pub async fn run(cfg: TelegramConfig) -> Result<()> {
             eprintln!("[telegram] Antwort senden fehlgeschlagen: {e:#}");
         }
 
-        verlauf_vec.push(Message::User(text.clone()));
-        verlauf_vec.push(Message::Assistant {
-            text: antwort,
-            tool_calls: Vec::new(),
-        });
+        {
+            let mut verlauf_guard = verlaeufe.lock().unwrap_or_else(|e| e.into_inner());
+            let verlauf_vec = verlauf_guard.entry(chat_id).or_default();
+            verlauf_vec.push(Message::User(text.clone()));
+            verlauf_vec.push(Message::Assistant {
+                text: antwort,
+                tool_calls: Vec::new(),
+            });
+        }
     }
     Ok(())
 }

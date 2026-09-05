@@ -222,7 +222,7 @@ impl Tool for WebRequestTool {
 
         // ── Cookie-Header bauen ─
         let cookie_header = {
-            let jar = self.cookies.lock().unwrap();
+            let jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
             if jar.is_empty() {
                 None
             } else {
@@ -315,7 +315,7 @@ impl Tool for WebRequestTool {
 
         // ── Cookies aktualisieren und speichern ─
         {
-            let mut jar = self.cookies.lock().unwrap();
+            let mut jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
             for (key, value) in &neue_cookies {
                 jar.insert(key.clone(), value.clone());
             }
@@ -323,7 +323,7 @@ impl Tool for WebRequestTool {
             drop(jar);
         }
         {
-            let jar = self.cookies.lock().unwrap();
+            let jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
             speichere_cookies(&self.daten_pfad, &jar);
         }
 
@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn speichern_und_laden_roundtrip() {
         let tmp = std::env::temp_dir().join("famulus_test_cookies");
-        let _ = std::fs::remove_file(&tmp.join(COOKIE_DATEI));
+        let _ = std::fs::remove_file(tmp.join(COOKIE_DATEI));
 
         let mut karte = HashMap::new();
         karte.insert("session".to_string(), "geheim".to_string());
@@ -407,6 +407,6 @@ mod tests {
         let geladen = lade_cookies(&tmp);
         assert_eq!(geladen.get("session").unwrap(), "geheim");
 
-        let _ = std::fs::remove_file(&tmp.join(COOKIE_DATEI));
+        let _ = std::fs::remove_file(tmp.join(COOKIE_DATEI));
     }
 }

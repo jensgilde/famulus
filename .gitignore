@@ -1,11 +1,14 @@
 /target
 .env
 gui/gen
+.DS_Store
 
 # Laufzeit-Daten, kein Quellcode: das Gedächtnis (SQLite) und der
 # Obsidian-Vault liegen jetzt im Projektordner statt unter ~/.famulus,
 # gehören aber nicht ins Repo - das ist Jens' persönliches Wissen.
 /gedaechtnis.db
+/gedaechtnis.db-shm
+/gedaechtnis.db-wal
 /vault/
 
 # Swift-Hülle (swift-app/, ab v0.10.0): Build-Artefakte und generierte
@@ -13,3 +16,6 @@ gui/gen
 swift-app/build/
 swift-app/Famulus.xcodeproj/
 swift-app/Generated/
+
+# Backup-Dateien
+scripts/*.bak

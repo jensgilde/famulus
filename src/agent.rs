@@ -508,7 +508,7 @@ impl Agent {
             // davon nichts mit, `nachrichten` bleibt allein in dieser
             // Schleife verändert.
             while let Ok(text) = zwischenfragen.try_recv() {
-                let sofort_provider = Arc::clone(&provider);
+                let sofort_provider = Arc::clone(provider);
                 let sofort_ui = Arc::clone(&self.ui);
                 let sofort_system = system.clone();
                 let mut sofort_kontext = nachrichten.clone();
@@ -536,7 +536,7 @@ impl Agent {
                 )));
             }
 
-            let antwort = rufe_mit_wiederaufsetzen(provider.as_ref(), system.as_deref(), &nachrichten, &tool_defs, self.ui.as_ref())
+            let antwort = rufe_mit_wiederaufsetzen(provider.as_ref(), system.as_deref(), nachrichten, tool_defs, self.ui.as_ref())
                 .await?;
 
             // Text ausgeben.
@@ -900,19 +900,21 @@ fn nachrichten_kuerzen(nachrichten: &mut Vec<Message>) {
         keep_idx = i;
     }
     let gekuerzt = nachrichten.len() - keep_idx;
-    if gekuerzt > 0 && system.is_some() {
-        *nachrichten = {
-            let mut v = vec![system.expect("System-Prompt muss da sein, wenn wir kürzen")];
-            // Hinweis in den Verlauf, damit das Modell nicht referenziert,
-            // was es nicht mehr sehen kann.
-            v.push(Message::User(format!(
-                "[Hinweis: {} frühere Nachrichten wurden aus Platzgründen aus dem Kontext entfernt - behandle den Auftrag ab hier als frischen Start]",
-                gekuerzt
-            )));
-            v.extend(nachrichten.drain(keep_idx..));
-            v
-        };
-        eprintln!("[agent] Kontext gekürzt: {gekuerzt} ältere Nachrichten entfernt, {hinten_len} Zeichen behalten");
+    if gekuerzt > 0 {
+        if let Some(sys) = system.as_ref() {
+            *nachrichten = {
+                let mut v = vec![sys.clone()];
+                // Hinweis in den Verlauf, damit das Modell nicht referenziert,
+                // was es nicht mehr sehen kann.
+                v.push(Message::User(format!(
+                    "[Hinweis: {} frühere Nachrichten wurden aus Platzgründen aus dem Kontext entfernt - behandle den Auftrag ab hier als frischen Start]",
+                    gekuerzt
+                )));
+                v.extend(nachrichten.drain(keep_idx..));
+                v
+            };
+            eprintln!("[agent] Kontext gekürzt: {gekuerzt} ältere Nachrichten entfernt, {hinten_len} Zeichen behalten");
+        }
     }
 }
 
